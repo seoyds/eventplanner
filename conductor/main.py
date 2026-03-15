@@ -153,6 +153,7 @@ async def ag_ui_endpoint(request: Request):
                         )
                     )
                 running_agents.clear()
+                break  # ResultMessage means Claude is done — end the stream
 
         yield encoder.encode(
             TextMessageEndEvent(
