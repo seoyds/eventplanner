@@ -68,7 +68,7 @@ class BaseEventAgent:
             system_prompt=self.system_prompt,
             allowed_tools=allowed_tools,
             mcp_servers=mcp_servers if mcp_servers else None,
-            max_turns=10,
+            max_turns=3,
             permission_mode="acceptEdits",
         )
 
