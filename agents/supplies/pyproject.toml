@@ -1,0 +1,13 @@
+[project]
+name = "supplies-agent"
+version = "0.1.0"
+description = "supplies specialist agent"
+requires-python = ">=3.12"
+dependencies = ["shared"]
+
+[tool.uv.sources]
+shared = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
