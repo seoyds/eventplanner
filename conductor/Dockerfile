@@ -27,7 +27,7 @@ RUN for d in agents/venue agents/weather agents/budget agents/menu agents/activi
 # Now copy conductor's actual code (overwrites stubs)
 COPY conductor/ ./conductor/
 
-RUN uv sync --no-dev --package conductor
+RUN uv sync --no-dev --all-packages --no-install-workspace
 
 EXPOSE 8000
 CMD ["uv", "run", "python", "-m", "conductor.main"]
