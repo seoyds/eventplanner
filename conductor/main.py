@@ -124,13 +124,7 @@ async def ag_ui_endpoint(request: Request):
                                 )
                             )
             elif isinstance(sdk_message, ResultMessage):
-                yield encoder.encode(
-                    TextMessageContentEvent(
-                        type=EventType.TEXT_MESSAGE_CONTENT,
-                        message_id=msg_id,
-                        delta=f"\n\n{sdk_message.result}",
-                    )
-                )
+                pass  # Already streamed via AssistantMessage
 
         yield encoder.encode(
             TextMessageEndEvent(
