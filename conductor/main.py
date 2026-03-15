@@ -69,19 +69,20 @@ async def ag_ui_endpoint(request: Request):
     body = raw.get("body", raw)
     input_data = RunAgentInput(**body)
 
-    user_message = ""
-    for msg in reversed(input_data.messages):
-        if msg.role == "user":
-            if msg.content:
-                # content can be a string or list of content blocks
-                if isinstance(msg.content, str):
-                    user_message = msg.content
-                elif isinstance(msg.content, list) and msg.content:
-                    first = msg.content[0]
-                    user_message = first.text if hasattr(first, "text") else str(first)
-                else:
-                    user_message = str(msg.content)
-            break
+    # Build conversation history from all messages
+    conversation = []
+    for msg in input_data.messages:
+        content = ""
+        if hasattr(msg, "content") and msg.content:
+            if isinstance(msg.content, str):
+                content = msg.content
+            elif isinstance(msg.content, list) and msg.content:
+                first = msg.content[0]
+                content = first.text if hasattr(first, "text") else str(first)
+            else:
+                content = str(msg.content)
+        if content:
+            conversation.append({"role": msg.role, "content": content})
 
     async def event_stream():
         encoder = EventEncoder(accept=accept_header)
@@ -105,7 +106,7 @@ async def ag_ui_endpoint(request: Request):
         # Track agents currently running — mark completed when next message arrives
         running_agents: list[str] = []
 
-        async for sdk_message in run_orchestrator(user_message):
+        async for sdk_message in run_orchestrator(conversation):
             if isinstance(sdk_message, AssistantMessage):
                 # Mark previously running agents as completed
                 for agent_name in running_agents:
@@ -128,13 +129,17 @@ async def ag_ui_endpoint(request: Request):
                         )
                     elif isinstance(block, ToolUseBlock):
                         tool_name = block.name
-                        if "call_" in tool_name and "_agent" in tool_name:
-                            agent_name = tool_name.split("call_")[-1].replace("_agent", "")
-                            running_agents.append(agent_name)
+                        # Generic call_agent tool — extract agent_id from the input
+                        if tool_name.endswith("call_agent"):
+                            try:
+                                agent_id = block.input.get("agent_id", "unknown") if hasattr(block, "input") else "unknown"
+                            except Exception:
+                                agent_id = "unknown"
+                            running_agents.append(agent_id)
                             yield encoder.encode(
                                 StateSnapshotEvent(
                                     type=EventType.STATE_SNAPSHOT,
-                                    snapshot={"agent_statuses": {agent_name: "running"}},
+                                    snapshot={"agent_statuses": {agent_id: "running"}},
                                 )
                             )
             elif isinstance(sdk_message, ResultMessage):

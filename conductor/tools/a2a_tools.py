@@ -1,6 +1,9 @@
-"""MCP tools that make A2A calls to specialist agents.
+"""Dynamic MCP tools for the conductor.
 
-Agent URLs are discovered dynamically from the self-hosted NANDA registry.
+Instead of hardcoded per-agent tools, provides:
+- discover_agents: Query NANDA registry for available agents + capabilities
+- call_agent: Call any agent by ID (resolved via NANDA)
+- check_budget: Local budget validation
 """
 import json
 import httpx
@@ -23,8 +26,80 @@ async def _resolve_agent_url(agent_id: str) -> str:
     return _agent_url_cache[agent_id]
 
 
-async def _call_agent(agent_id: str, requirements: dict, context: dict) -> dict:
-    """Discover agent via NANDA registry, then make A2A call."""
+@tool("discover_agents", "Query the NANDA registry for available specialist agents and their capabilities", {
+    "query": str,
+})
+async def discover_agents(args):
+    """Discover available agents from the NANDA registry.
+
+    Args:
+        query: Search query or 'all' to list everything.
+    """
+    query_str = args.get("query", "all")
+
+    # Get all registered agents
+    agents = await _nanda.list_agents()
+
+    if not agents:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "agents": [],
+            "message": "No agents registered in the NANDA registry."
+        })}]}
+
+    # For each agent, fetch its agent card for detailed capabilities
+    agent_details = []
+    for agent_id, agent_url in agents.items():
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{agent_url}/.well-known/agent.json")
+                if resp.status_code == 200:
+                    card = resp.json()
+                    agent_details.append({
+                        "agent_id": agent_id,
+                        "name": card.get("name", agent_id),
+                        "description": card.get("description", "No description"),
+                        "skills": [
+                            {"name": s.get("name", ""), "description": s.get("description", "")}
+                            for s in card.get("skills", [])
+                        ],
+                        "url": agent_url,
+                    })
+                else:
+                    agent_details.append({
+                        "agent_id": agent_id,
+                        "description": "Agent registered but card unavailable",
+                        "url": agent_url,
+                    })
+        except Exception:
+            agent_details.append({
+                "agent_id": agent_id,
+                "description": "Agent registered but unreachable",
+                "url": agent_url,
+            })
+
+    return {"content": [{"type": "text", "text": json.dumps({
+        "agents": agent_details,
+        "total": len(agent_details),
+    }, indent=2)}]}
+
+
+@tool("call_agent", "Call a specialist agent by ID to perform a task", {
+    "agent_id": str,
+    "requirements": str,
+    "context": str,
+})
+async def call_agent(args):
+    """Call any registered agent by its ID.
+
+    Args:
+        agent_id: The agent to call (e.g., 'venue', 'weather', 'budget')
+        requirements: JSON string of event requirements to pass to the agent
+        context: JSON string of context from other agents' results
+    """
+    agent_id = args["agent_id"]
+    requirements = json.loads(args["requirements"])
+    context = json.loads(args["context"]) if args.get("context") else {}
+
     agent_url = await _resolve_agent_url(agent_id)
     async with httpx.AsyncClient(timeout=300) as client:
         resp = await client.post(
@@ -36,81 +111,17 @@ async def _call_agent(agent_id: str, requirements: dict, context: dict) -> dict:
                 "params": {"requirements": requirements, "context": context},
             },
         )
-        return resp.json().get("result", {})
+        result = resp.json().get("result", {})
 
+    return {"content": [{"type": "text", "text": json.dumps({
+        "agent_id": agent_id,
+        "result": result,
+    })}]}
 
-@tool("call_venue_agent", "Find and score event venues", {
-    "requirements": str, "context": str,
-})
-async def call_venue_agent(args):
-    result = await _call_agent("venue", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_weather_agent", "Get weather forecast and contingency plan", {
-    "requirements": str, "context": str,
-})
-async def call_weather_agent(args):
-    result = await _call_agent("weather", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_budget_agent", "Calculate and validate budget", {
-    "requirements": str, "context": str,
-})
-async def call_budget_agent(args):
-    result = await _call_agent("budget", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_menu_agent", "Plan meals and calculate food costs", {
-    "requirements": str, "context": str,
-})
-async def call_menu_agent(args):
-    result = await _call_agent("menu", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_activity_agent", "Plan entertainment and activities", {
-    "requirements": str, "context": str,
-})
-async def call_activity_agent(args):
-    result = await _call_agent("activity", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_accessibility_agent", "Audit venues and activities for accessibility", {
-    "requirements": str, "context": str,
-})
-async def call_accessibility_agent(args):
-    result = await _call_agent("accessibility", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_theme_agent", "Design event aesthetic and decorations", {
-    "requirements": str, "context": str,
-})
-async def call_theme_agent(args):
-    result = await _call_agent("theme", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_logistics_agent", "Create day-of timeline and logistics plan", {
-    "requirements": str, "context": str,
-})
-async def call_logistics_agent(args):
-    result = await _call_agent("logistics", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_communication_agent", "Draft invitations and communication templates", {
-    "requirements": str, "context": str,
-})
-async def call_communication_agent(args):
-    result = await _call_agent("communication", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
-
-@tool("call_supplies_agent", "Source party favors, decorations, and supplies", {
-    "requirements": str, "context": str,
-})
-async def call_supplies_agent(args):
-    result = await _call_agent("supplies", json.loads(args["requirements"]), json.loads(args["context"]))
-    return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
 @tool("check_budget", "Validate total costs against budget limit", {
-    "all_results": str, "budget_limit": float,
+    "all_results": str,
+    "budget_limit": float,
 })
 async def check_budget(args):
     """Quick budget check without calling the full budget agent."""
@@ -118,13 +129,10 @@ async def check_budget(args):
     total = sum(r.get("estimated_cost", 0) for r in results.values())
     remaining = args["budget_limit"] - total
     return {"content": [{"type": "text", "text": json.dumps({
-        "total": total, "remaining": remaining,
+        "total": total,
+        "remaining": remaining,
         "status": "ok" if remaining >= 0 else "over_budget",
     })}]}
 
-AGENT_TOOLS = [
-    call_venue_agent, call_weather_agent, call_budget_agent,
-    call_menu_agent, call_activity_agent, call_accessibility_agent,
-    call_theme_agent, call_logistics_agent, call_communication_agent,
-    call_supplies_agent, check_budget,
-]
+
+AGENT_TOOLS = [discover_agents, call_agent, check_budget]
