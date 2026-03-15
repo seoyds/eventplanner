@@ -1,13 +1,14 @@
 [project]
-name = "communication-agent"
+name = "weather-agent"
 version = "0.1.0"
-description = "Communication Writer agent"
+description = "Weather Analyst agent"
 requires-python = ">=3.12"
 dependencies = [
     "shared",
     "claude-agent-sdk",
     "fastapi",
     "uvicorn",
+    "httpx",
 ]
 
 [tool.uv.sources]

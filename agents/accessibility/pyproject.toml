@@ -1,9 +1,14 @@
 [project]
 name = "accessibility-agent"
 version = "0.1.0"
-description = "accessibility specialist agent"
+description = "Accessibility Checker agent"
 requires-python = ">=3.12"
-dependencies = ["shared"]
+dependencies = [
+    "shared",
+    "claude-agent-sdk",
+    "fastapi",
+    "uvicorn",
+]
 
 [tool.uv.sources]
 shared = { workspace = true }

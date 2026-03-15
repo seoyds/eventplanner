@@ -1,7 +1,7 @@
 [project]
-name = "communication-agent"
+name = "budget-agent"
 version = "0.1.0"
-description = "Communication Writer agent"
+description = "Budget Manager agent"
 requires-python = ">=3.12"
 dependencies = [
     "shared",

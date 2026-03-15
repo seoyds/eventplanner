@@ -1,9 +1,14 @@
 [project]
 name = "supplies-agent"
 version = "0.1.0"
-description = "supplies specialist agent"
+description = "Supplies Estimator agent"
 requires-python = ">=3.12"
-dependencies = ["shared"]
+dependencies = [
+    "shared",
+    "claude-agent-sdk",
+    "fastapi",
+    "uvicorn",
+]
 
 [tool.uv.sources]
 shared = { workspace = true }
