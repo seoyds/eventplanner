@@ -35,7 +35,7 @@ services:
     build:
       context: .
       dockerfile: agents/venue/Dockerfile
-    ports: ["8001:8001"]
+    ports: ["8101:8001"]
     environment: &agent-env
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       NANDA_REGISTRY_URL: http://nanda-registry:6900

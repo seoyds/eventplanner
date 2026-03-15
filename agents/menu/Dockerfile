@@ -27,7 +27,7 @@ RUN for d in agents/venue agents/weather agents/budget agents/menu agents/activi
 # Now copy this agent's actual code (overwrites stubs)
 COPY agents/menu/ ./agents/menu/
 
-RUN uv sync --no-dev --package menu-agent
+RUN uv sync --no-dev --all-packages --no-install-workspace
 
 EXPOSE 8004
 CMD ["uv", "run", "python", "-m", "agents.menu.main"]
