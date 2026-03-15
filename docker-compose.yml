@@ -127,7 +127,7 @@ services:
     build:
       context: .
       dockerfile: agents/supplies/Dockerfile
-    ports: ["8010:8010"]
+    ports: ["8110:8010"]
     environment: *agent-env
     depends_on:
       nanda-registry:

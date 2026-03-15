@@ -27,7 +27,7 @@ RUN for d in agents/venue agents/weather agents/budget agents/menu agents/activi
 # Now copy this agent's actual code (overwrites stubs)
 COPY agents/communication/ ./agents/communication/
 
-RUN uv sync --no-dev
+RUN uv sync --no-dev --package communication-agent
 
 EXPOSE 8009
 CMD ["uv", "run", "python", "-m", "agents.communication.main"]
