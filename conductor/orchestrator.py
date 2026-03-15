@@ -1,8 +1,8 @@
 """Conductor orchestration logic using claude-agent-sdk.
 
-Uses stateless query() with full conversation history in each call.
-The system prompt instructs Claude to discover agents, propose a plan,
-and execute on confirmation — all based on conversation context.
+Single-turn flow: discover agents → present plan → execute immediately.
+No confirmation step — the conductor discovers, plans, and executes
+all in one shot.
 """
 from claude_agent_sdk import query, ClaudeAgentOptions, create_sdk_mcp_server
 from conductor.tools.a2a_tools import AGENT_TOOLS
@@ -10,38 +10,46 @@ from conductor.tools.a2a_tools import AGENT_TOOLS
 CONDUCTOR_SYSTEM_PROMPT = """You are the Event Orchestrator Conductor. You dynamically
 discover and coordinate specialist agents to plan events.
 
-## Your Process
+## Your Process (ALL IN ONE GO — do not wait for confirmation)
 
-### Phase 1: Understand & Discover (first user message)
-1. Analyze the user's request to understand what they need
-2. Use the `discover_agents` tool to find available specialist agents in the registry
-3. Match the user's needs against available agent capabilities
-4. Propose a workflow: list agents, organize into waves, explain why
-5. Ask "Shall I proceed?"
+### Step 1: Discover
+Use the `discover_agents` tool to find available specialist agents in the registry.
 
-### Phase 2: Execute (after user confirms)
-When the conversation history shows you already proposed a plan AND the user confirmed:
-1. DO NOT re-discover agents or re-propose — go straight to execution
-2. Execute the workflow wave by wave using `call_agent`
-3. Pass results from earlier agents as context to later agents
-4. After each wave, use `check_budget` if a budget was specified
-5. Compile all results into a comprehensive Event Blueprint
+### Step 2: Plan
+Based on available agents and the user's request:
+- Briefly present your plan: which agents you'll use and in what order
+- Organize into waves (independent agents first, then dependent ones)
+- If NO suitable agents exist, tell the user and stop
 
-## Tools Available
-- `discover_agents`: Query the NANDA registry. Pass query="all" to list everything.
-- `call_agent`: Call an agent by ID. Pass requirements and context as JSON strings.
-- `check_budget`: Validate total costs against a budget limit.
+### Step 3: Execute IMMEDIATELY
+Do NOT wait for user confirmation. After presenting the plan, execute it right away:
+1. Call agents wave by wave using `call_agent`
+2. For each agent call, pass:
+   - agent_id: the agent's ID from the registry
+   - requirements: JSON string with the event requirements from the user's request
+   - context: JSON string with results from previously completed agents (empty "{}" for Wave 1)
+3. After each wave, use `check_budget` if a budget was specified
+4. Pass results from earlier waves as context to later waves
 
-## Important Rules
-- ALWAYS discover agents first on a new request
-- ALWAYS propose and get confirmation before executing
-- If no suitable agents exist, tell the user clearly
-- When executing, pass results from earlier agents as context to later ones
+### Step 4: Compile Blueprint
+After all agents complete, compile everything into a comprehensive Event Blueprint.
+Present it in a clear, structured format with sections for each aspect of the event.
+
+## Tools
+- `discover_agents`: Query NANDA registry. Pass query="all".
+- `call_agent`: Call agent by ID. Pass requirements and context as JSON strings.
+- `check_budget`: Validate costs against budget limit.
+
+## Critical Rules
+- ALWAYS discover agents first — never assume what's available
+- ALWAYS use `call_agent` to delegate work — do NOT answer questions yourself
+- If an agent returns an error or empty result, note it and continue with other agents
+- Pass ALL prior agent results as context to later agents so they can build on each other
 """
 
 
 async def run_orchestrator(conversation: list[dict]):
-    """Run the conductor using stateless query() with full conversation.
+    """Run the conductor using stateless query().
 
     Args:
         conversation: List of {"role": "user"|"assistant", "content": "..."} dicts
@@ -59,47 +67,16 @@ async def run_orchestrator(conversation: list[dict]):
         system_prompt=CONDUCTOR_SYSTEM_PROMPT,
         mcp_servers={"conductor-tools": conductor_tools},
         allowed_tools=allowed + ["WebSearch"],
-        max_turns=30,
+        max_turns=50,
         permission_mode="acceptEdits",
     )
 
-    prompt = _build_prompt(conversation)
+    # Use the latest user message as the prompt
+    prompt = ""
+    for msg in reversed(conversation):
+        if msg.get("role") == "user":
+            prompt = msg.get("content", "")
+            break
 
     async for message in query(prompt=prompt, options=options):
         yield message
-
-
-def _build_prompt(conversation: list[dict]) -> str:
-    """Build prompt from conversation history."""
-    if not conversation:
-        return ""
-
-    if len(conversation) == 1:
-        return conversation[0].get("content", "")
-
-    # Multi-turn: include full history so Claude knows what it proposed
-    parts = []
-    for msg in conversation:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if role == "user":
-            parts.append(f"[USER]: {content}")
-        elif role == "assistant":
-            parts.append(f"[ASSISTANT (you said this earlier)]: {content}")
-
-    # Detect confirmation
-    last_user = ""
-    for msg in reversed(conversation):
-        if msg.get("role") == "user":
-            last_user = msg.get("content", "").strip().lower()
-            break
-
-    confirms = ["yes", "proceed", "go ahead", "confirm", "do it", "ok", "sure", "start", "approved"]
-    if any(w in last_user for w in confirms):
-        parts.append(
-            "\n[SYSTEM INSTRUCTION]: The user confirmed your proposed plan above. "
-            "Execute it NOW. Call the agents in the waves you proposed using the `call_agent` tool. "
-            "Do NOT re-discover agents. Do NOT re-propose the plan. Start executing Wave 1 immediately."
-        )
-
-    return "\n\n".join(parts)
