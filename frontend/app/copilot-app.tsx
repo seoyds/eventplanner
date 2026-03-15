@@ -37,8 +37,7 @@ function AgentMonitor() {
 }
 
 export default function CopilotApp() {
-  const runtimeUrl =
-    process.env.NEXT_PUBLIC_CONDUCTOR_URL || "http://localhost:8000/ag-ui";
+  const runtimeUrl = "/api/copilotkit";
 
   return (
     <CopilotKit runtimeUrl={runtimeUrl}>

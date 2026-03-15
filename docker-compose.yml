@@ -151,7 +151,7 @@ services:
       dockerfile: frontend/Dockerfile
     ports: ["3000:3000"]
     environment:
-      - NEXT_PUBLIC_CONDUCTOR_URL=http://conductor:8000/ag-ui
+      - CONDUCTOR_INTERNAL_URL=http://conductor:8000
     depends_on:
       - conductor
 
