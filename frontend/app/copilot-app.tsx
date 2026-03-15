@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 
 interface Message {
   id: string;
@@ -17,6 +17,7 @@ export default function CopilotApp() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [agentStatuses, setAgentStatuses] = useState<AgentStatuses>({});
+  const threadId = useMemo(() => crypto.randomUUID(), []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,7 +54,7 @@ export default function CopilotApp() {
           method: "agent/run",
           params: { agentId: "default" },
           body: {
-            threadId: crypto.randomUUID(),
+            threadId: threadId,
             runId: crypto.randomUUID(),
             messages: [
               { id: userMsg.id, role: "user", content: userMsg.content },

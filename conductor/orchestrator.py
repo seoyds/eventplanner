@@ -99,6 +99,7 @@ async def run_orchestrator(thread_id: str, user_message: str):
     Yields SDK messages for streaming to the frontend.
     """
     client, is_new = await get_or_create_client(thread_id)
+    print(f"[conductor] thread={thread_id} is_new={is_new} active_clients={list(_active_clients.keys())}", flush=True)
 
     # Send the user's message — Claude remembers prior context
     await client.query(user_message, session_id=thread_id)
