@@ -15,7 +15,7 @@ from ag_ui.core import (
     StateSnapshotEvent,
 )
 from ag_ui.encoder import EventEncoder
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock, ToolResultBlock
 
 from conductor.orchestrator import run_orchestrator
 
@@ -102,6 +102,9 @@ async def ag_ui_endpoint(request: Request):
             )
         )
 
+        # Track tool_use_id -> agent_name for marking completed
+        pending_tools: dict[str, str] = {}
+
         async for sdk_message in run_orchestrator(user_message):
             if isinstance(sdk_message, AssistantMessage):
                 for block in sdk_message.content:
@@ -117,10 +120,21 @@ async def ag_ui_endpoint(request: Request):
                         tool_name = block.name
                         if "call_" in tool_name and "_agent" in tool_name:
                             agent_name = tool_name.split("call_")[-1].replace("_agent", "")
+                            pending_tools[block.id] = agent_name
                             yield encoder.encode(
                                 StateSnapshotEvent(
                                     type=EventType.STATE_SNAPSHOT,
                                     snapshot={"agent_statuses": {agent_name: "running"}},
+                                )
+                            )
+                    elif isinstance(block, ToolResultBlock):
+                        tool_id = getattr(block, "tool_use_id", None)
+                        if tool_id and tool_id in pending_tools:
+                            agent_name = pending_tools.pop(tool_id)
+                            yield encoder.encode(
+                                StateSnapshotEvent(
+                                    type=EventType.STATE_SNAPSHOT,
+                                    snapshot={"agent_statuses": {agent_name: "completed"}},
                                 )
                             )
             elif isinstance(sdk_message, ResultMessage):
