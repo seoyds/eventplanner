@@ -1,7 +1,7 @@
 FROM node:20-slim
 WORKDIR /app
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 COPY frontend/ .
 RUN npm run build
 EXPOSE 3000
