@@ -1,10 +1,11 @@
-"""Conductor orchestration logic using claude-agent-sdk.
+"""Conductor orchestration logic using ClaudeSDKClient for persistent sessions.
 
-The conductor dynamically discovers agents from the NANDA registry,
-plans a workflow based on the user's request, gets confirmation,
-then executes.
+Uses ClaudeSDKClient instead of the stateless query() function, so that
+conversation context (including tool results from discover_agents) is
+preserved across turns. One client per thread_id.
 """
-from claude_agent_sdk import query, ClaudeAgentOptions, create_sdk_mcp_server
+import asyncio
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, create_sdk_mcp_server
 from conductor.tools.a2a_tools import AGENT_TOOLS
 
 CONDUCTOR_SYSTEM_PROMPT = """You are the Event Orchestrator Conductor. You dynamically
@@ -47,16 +48,12 @@ Once the user confirms (says yes, go ahead, proceed, confirm, etc.):
 - Respect dependencies: some agents need results from others before they can work
 """
 
+# Store active clients by thread_id
+_active_clients: dict[str, ClaudeSDKClient] = {}
 
-async def run_orchestrator(conversation: list[dict]):
-    """Run the conductor using claude-agent-sdk.
 
-    Args:
-        conversation: List of message dicts with 'role' and 'content' keys,
-                      representing the full conversation history.
-
-    Yields SDK messages for streaming to the frontend.
-    """
+def _create_client() -> ClaudeSDKClient:
+    """Create a new ClaudeSDKClient with conductor tools."""
     conductor_tools = create_sdk_mcp_server(
         name="conductor-tools",
         tools=AGENT_TOOLS,
@@ -72,59 +69,50 @@ async def run_orchestrator(conversation: list[dict]):
         permission_mode="acceptEdits",
     )
 
-    # Build prompt from conversation history
-    prompt = _build_conversation_prompt(conversation)
+    return ClaudeSDKClient(options=options)
 
-    async for message in query(prompt=prompt, options=options):
+
+async def get_or_create_client(thread_id: str) -> tuple[ClaudeSDKClient, bool]:
+    """Get an existing client for a thread or create a new one.
+
+    Returns (client, is_new) tuple.
+    """
+    if thread_id in _active_clients:
+        return _active_clients[thread_id], False
+
+    client = _create_client()
+    await client.connect()
+    _active_clients[thread_id] = client
+    return client, True
+
+
+async def run_orchestrator(thread_id: str, user_message: str):
+    """Run the conductor using a persistent ClaudeSDKClient session.
+
+    The client maintains conversation context across turns, so when
+    the user confirms a plan, Claude already knows what was proposed.
+
+    Args:
+        thread_id: Thread identifier for session persistence
+        user_message: The latest user message
+
+    Yields SDK messages for streaming to the frontend.
+    """
+    client, is_new = await get_or_create_client(thread_id)
+
+    # Send the user's message — Claude remembers prior context
+    await client.query(user_message, session_id=thread_id)
+
+    # Stream responses
+    async for message in client.receive_messages():
         yield message
 
 
-def _build_conversation_prompt(conversation: list[dict]) -> str:
-    """Build a prompt string from the conversation history.
-
-    For single messages, just return the content.
-    For multi-turn, include the full conversation so Claude understands
-    what was already proposed and can act on confirmations.
-    """
-    if not conversation:
-        return ""
-
-    if len(conversation) == 1:
-        return conversation[0].get("content", "")
-
-    # Multi-turn: format as explicit conversation transcript
-    parts = ["## Conversation History\n"]
-    for msg in conversation:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if role == "user":
-            parts.append(f"**User:** {content}")
-        elif role == "assistant":
-            parts.append(f"**You (Assistant) previously said:** {content}")
-
-    # Check if the last user message looks like a confirmation
-    last_user = ""
-    for msg in reversed(conversation):
-        if msg.get("role") == "user":
-            last_user = msg.get("content", "").strip().lower()
-            break
-
-    confirmation_words = ["yes", "proceed", "go ahead", "confirm", "do it", "ok", "sure", "let's go", "approved", "go", "start"]
-    is_confirmation = any(word in last_user for word in confirmation_words)
-
-    if is_confirmation:
-        parts.append(
-            "\n## IMPORTANT INSTRUCTION\n"
-            "The user has confirmed the plan you proposed above. "
-            "Do NOT ask what event to plan — you already know from the conversation history. "
-            "Do NOT re-discover agents — you already proposed which agents to use. "
-            "EXECUTE THE PLAN NOW by calling the agents in the waves you proposed. "
-            "Start with Wave 1 immediately using the `call_agent` tool."
-        )
-    else:
-        parts.append(
-            "\n## Instruction\n"
-            "Continue the conversation naturally based on the history above."
-        )
-
-    return "\n\n".join(parts)
+async def cleanup_client(thread_id: str):
+    """Disconnect and remove a client for a thread."""
+    if thread_id in _active_clients:
+        client = _active_clients.pop(thread_id)
+        try:
+            client.disconnect()
+        except Exception:
+            pass
