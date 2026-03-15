@@ -57,6 +57,7 @@ export default function CopilotApp() {
             threadId: threadId,
             runId: crypto.randomUUID(),
             messages: [
+              ...messages.map((m) => ({ id: m.id, role: m.role, content: m.content })),
               { id: userMsg.id, role: "user", content: userMsg.content },
             ],
             tools: [],

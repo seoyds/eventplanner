@@ -69,21 +69,20 @@ async def ag_ui_endpoint(request: Request):
     body = raw.get("body", raw)
     input_data = RunAgentInput(**body)
 
-    # Extract the latest user message (client maintains conversation state)
-    user_message = ""
-    for msg in reversed(input_data.messages):
-        if msg.role == "user":
-            if hasattr(msg, "content") and msg.content:
-                if isinstance(msg.content, str):
-                    user_message = msg.content
-                elif isinstance(msg.content, list) and msg.content:
-                    first = msg.content[0]
-                    user_message = first.text if hasattr(first, "text") else str(first)
-                else:
-                    user_message = str(msg.content)
-            break
-
-    thread_id = input_data.thread_id
+    # Build full conversation history for the orchestrator
+    conversation = []
+    for msg in input_data.messages:
+        content = ""
+        if hasattr(msg, "content") and msg.content:
+            if isinstance(msg.content, str):
+                content = msg.content
+            elif isinstance(msg.content, list) and msg.content:
+                first = msg.content[0]
+                content = first.text if hasattr(first, "text") else str(first)
+            else:
+                content = str(msg.content)
+        if content:
+            conversation.append({"role": msg.role, "content": content})
 
     async def event_stream():
         encoder = EventEncoder(accept=accept_header)
@@ -107,7 +106,7 @@ async def ag_ui_endpoint(request: Request):
         # Track agents currently running — mark completed when next message arrives
         running_agents: list[str] = []
 
-        async for sdk_message in run_orchestrator(thread_id, user_message):
+        async for sdk_message in run_orchestrator(conversation):
             if isinstance(sdk_message, AssistantMessage):
                 # Mark previously running agents as completed
                 for agent_name in running_agents:
@@ -153,7 +152,6 @@ async def ag_ui_endpoint(request: Request):
                         )
                     )
                 running_agents.clear()
-                break  # ResultMessage means Claude is done — end the stream
 
         yield encoder.encode(
             TextMessageEndEvent(
