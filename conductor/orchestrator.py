@@ -104,8 +104,8 @@ async def run_orchestrator(thread_id: str, user_message: str):
     # Send the user's message — Claude remembers prior context
     await client.query(user_message, session_id=thread_id)
 
-    # Stream responses
-    async for message in client.receive_messages():
+    # Stream responses — receive_response() auto-terminates on ResultMessage
+    async for message in client.receive_response():
         yield message
 
 
