@@ -43,6 +43,9 @@ export default function CopilotApp() {
       { id: assistantId, role: "assistant", content: "" },
     ]);
 
+    const fetchController = new AbortController();
+    const fetchTimeout = setTimeout(() => fetchController.abort(), 10 * 60 * 1000); // 10 min
+
     try {
       const resp = await fetch("/api/copilotkit", {
         method: "POST",
@@ -50,6 +53,7 @@ export default function CopilotApp() {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
+        signal: fetchController.signal,
         body: JSON.stringify({
           method: "agent/run",
           params: { agentId: "default" },
@@ -113,14 +117,19 @@ export default function CopilotApp() {
         }
       }
     } catch (err) {
+      // Append error to existing content (don't replace partial results)
+      const errMsg = err instanceof Error && err.name === "AbortError"
+        ? "\n\n[Timed out — partial results shown above]"
+        : `\n\n[Error: ${err}]`;
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, content: `Error: ${err}` }
+            ? { ...m, content: m.content + errMsg }
             : m
         )
       );
     } finally {
+      clearTimeout(fetchTimeout);
       setIsStreaming(false);
     }
   };
