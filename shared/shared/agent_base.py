@@ -23,6 +23,7 @@ from a2a.utils import new_agent_text_message, new_task
 from fastapi import FastAPI
 
 from shared.schemas import AgentResult, AgentStatus
+from shared.nanda_registry import NandaRegistryClient
 
 
 class BaseEventAgent:
@@ -163,6 +164,29 @@ produce your analysis. Return your output as a JSON object with these fields:
         @app.get("/.well-known/agent.json")
         async def agent_card():
             return self.get_agent_card().model_dump()
+
+        agent_ref = self
+
+        @app.on_event("startup")
+        async def register_with_nanda():
+            """Register this agent with the NANDA registry on startup."""
+            nanda = NandaRegistryClient()
+            try:
+                await nanda.wait_for_registry(timeout=30)
+                skills = agent_ref.get_skills()
+                capabilities = [s["name"] for s in skills]
+                tags = []
+                for s in skills:
+                    tags.extend(s.get("tags", []))
+                await nanda.register_agent(
+                    agent_id=agent_ref.agent_id,
+                    agent_url=f"http://{agent_ref.agent_id}:{agent_ref.port}",
+                    capabilities=capabilities,
+                    tags=list(set(tags)),
+                )
+                print(f"[{agent_ref.agent_id}] Registered with NANDA registry")
+            except Exception as e:
+                print(f"[{agent_ref.agent_id}] WARN: Failed to register with NANDA: {e}")
 
         # A2A endpoint via official SDK
         card = self.get_agent_card()
