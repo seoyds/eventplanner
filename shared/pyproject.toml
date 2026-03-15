@@ -5,8 +5,8 @@ description = "Shared schemas and base classes for event orchestrator"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",
-    # "claude-agent-sdk",  # Not yet available on PyPI
-    # "a2a-sdk",           # Not yet available on PyPI
+    "claude-agent-sdk",
+    "a2a-sdk",
     "fastapi",
     "uvicorn",
     "httpx",
