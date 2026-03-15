@@ -1,0 +1,12 @@
+[project]
+name = "event-orchestrator"
+version = "0.1.0"
+description = "Multi-agent event planning system"
+requires-python = ">=3.12"
+
+[tool.uv.workspace]
+members = ["shared", "conductor", "agents/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
