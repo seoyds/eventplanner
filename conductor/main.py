@@ -24,10 +24,23 @@ app = FastAPI(title="Event Orchestrator Conductor")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/ag-ui/info")
+async def ag_ui_info():
+    """CopilotKit runtime info endpoint for agent discovery."""
+    return {
+        "agents": [
+            {
+                "name": "default",
+                "description": "Event Orchestrator Conductor",
+            }
+        ],
+    }
 
 
 @app.post("/ag-ui")
