@@ -61,7 +61,8 @@ class BaseEventAgent:
         if mcp_server:
             mcp_servers[self.agent_id] = mcp_server
             for t in mcp_tools:
-                allowed_tools.append(f"mcp__{self.agent_id}__{t.__name__}")
+                tool_name = t.name if hasattr(t, "name") else t.__name__
+                allowed_tools.append(f"mcp__{self.agent_id}__{tool_name}")
 
         options = ClaudeAgentOptions(
             system_prompt=self.system_prompt,

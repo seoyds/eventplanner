@@ -101,17 +101,29 @@ async def call_agent(args):
     context = json.loads(args["context"]) if args.get("context") else {}
 
     agent_url = await _resolve_agent_url(agent_id)
+
+    # A2A protocol: use message/send with a Message containing TextPart
+    message_payload = json.dumps({"requirements": requirements, "context": context})
     async with httpx.AsyncClient(timeout=300) as client:
         resp = await client.post(
             agent_url,
             json={
                 "jsonrpc": "2.0",
                 "id": "1",
-                "method": "execute",
-                "params": {"requirements": requirements, "context": context},
+                "method": "message/send",
+                "params": {
+                    "message": {
+                        "role": "user",
+                        "messageId": f"msg-{agent_id}",
+                        "kind": "message",
+                        "parts": [{"kind": "text", "text": message_payload}],
+                    }
+                },
             },
         )
-        result = resp.json().get("result", {})
+        resp_data = resp.json()
+        # Extract result from A2A response — could be in result.artifacts or result itself
+        result = resp_data.get("result", {})
 
     return {"content": [{"type": "text", "text": json.dumps({
         "agent_id": agent_id,
