@@ -83,7 +83,8 @@ def _build_conversation_prompt(conversation: list[dict]) -> str:
     """Build a prompt string from the conversation history.
 
     For single messages, just return the content.
-    For multi-turn, format as a conversation so Claude understands context.
+    For multi-turn, include the full conversation so Claude understands
+    what was already proposed and can act on confirmations.
     """
     if not conversation:
         return ""
@@ -91,15 +92,39 @@ def _build_conversation_prompt(conversation: list[dict]) -> str:
     if len(conversation) == 1:
         return conversation[0].get("content", "")
 
-    # Multi-turn: format conversation
-    parts = []
+    # Multi-turn: format as explicit conversation transcript
+    parts = ["## Conversation History\n"]
     for msg in conversation:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         if role == "user":
-            parts.append(f"User: {content}")
+            parts.append(f"**User:** {content}")
         elif role == "assistant":
-            parts.append(f"Assistant: {content}")
+            parts.append(f"**You (Assistant) previously said:** {content}")
 
-    parts.append("\nContinue the conversation. If the user just confirmed a plan, execute it now.")
+    # Check if the last user message looks like a confirmation
+    last_user = ""
+    for msg in reversed(conversation):
+        if msg.get("role") == "user":
+            last_user = msg.get("content", "").strip().lower()
+            break
+
+    confirmation_words = ["yes", "proceed", "go ahead", "confirm", "do it", "ok", "sure", "let's go", "approved", "go", "start"]
+    is_confirmation = any(word in last_user for word in confirmation_words)
+
+    if is_confirmation:
+        parts.append(
+            "\n## IMPORTANT INSTRUCTION\n"
+            "The user has confirmed the plan you proposed above. "
+            "Do NOT ask what event to plan — you already know from the conversation history. "
+            "Do NOT re-discover agents — you already proposed which agents to use. "
+            "EXECUTE THE PLAN NOW by calling the agents in the waves you proposed. "
+            "Start with Wave 1 immediately using the `call_agent` tool."
+        )
+    else:
+        parts.append(
+            "\n## Instruction\n"
+            "Continue the conversation naturally based on the history above."
+        )
+
     return "\n\n".join(parts)
