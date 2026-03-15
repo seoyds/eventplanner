@@ -3,7 +3,7 @@ import uuid
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from ag_ui.core import (
     RunAgentInput,
     EventType,
@@ -52,6 +52,18 @@ async def ag_ui_endpoint(request: Request):
     """
     accept_header = request.headers.get("accept")
     raw = await request.json()
+
+    # Handle CopilotKit RPC methods that aren't agent/run
+    method = raw.get("method", "")
+    if method in ("getInfo", "agent/info"):
+        return JSONResponse({
+            "agents": [
+                {
+                    "name": "default",
+                    "description": "Event Orchestrator Conductor",
+                }
+            ],
+        })
 
     # CopilotKit envelope: unwrap "body" if present
     body = raw.get("body", raw)
