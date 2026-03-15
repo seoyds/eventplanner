@@ -102,11 +102,21 @@ async def ag_ui_endpoint(request: Request):
             )
         )
 
-        # Track tool_use_id -> agent_name for marking completed
-        pending_tools: dict[str, str] = {}
+        # Track agents currently running — mark completed when next message arrives
+        running_agents: list[str] = []
 
         async for sdk_message in run_orchestrator(user_message):
             if isinstance(sdk_message, AssistantMessage):
+                # Mark previously running agents as completed
+                for agent_name in running_agents:
+                    yield encoder.encode(
+                        StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot={"agent_statuses": {agent_name: "completed"}},
+                        )
+                    )
+                running_agents.clear()
+
                 for block in sdk_message.content:
                     if isinstance(block, TextBlock):
                         yield encoder.encode(
@@ -120,25 +130,23 @@ async def ag_ui_endpoint(request: Request):
                         tool_name = block.name
                         if "call_" in tool_name and "_agent" in tool_name:
                             agent_name = tool_name.split("call_")[-1].replace("_agent", "")
-                            pending_tools[block.id] = agent_name
+                            running_agents.append(agent_name)
                             yield encoder.encode(
                                 StateSnapshotEvent(
                                     type=EventType.STATE_SNAPSHOT,
                                     snapshot={"agent_statuses": {agent_name: "running"}},
                                 )
                             )
-                    elif isinstance(block, ToolResultBlock):
-                        tool_id = getattr(block, "tool_use_id", None)
-                        if tool_id and tool_id in pending_tools:
-                            agent_name = pending_tools.pop(tool_id)
-                            yield encoder.encode(
-                                StateSnapshotEvent(
-                                    type=EventType.STATE_SNAPSHOT,
-                                    snapshot={"agent_statuses": {agent_name: "completed"}},
-                                )
-                            )
             elif isinstance(sdk_message, ResultMessage):
-                pass  # Already streamed via AssistantMessage
+                # Final message — mark any remaining agents as completed
+                for agent_name in running_agents:
+                    yield encoder.encode(
+                        StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot={"agent_statuses": {agent_name: "completed"}},
+                        )
+                    )
+                running_agents.clear()
 
         yield encoder.encode(
             TextMessageEndEvent(
