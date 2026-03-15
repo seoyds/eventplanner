@@ -26,9 +26,9 @@ async def _resolve_agent_url(agent_id: str) -> str:
 async def _call_agent(agent_id: str, requirements: dict, context: dict) -> dict:
     """Discover agent via NANDA registry, then make A2A call."""
     agent_url = await _resolve_agent_url(agent_id)
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=300) as client:
         resp = await client.post(
-            f"{agent_url}/a2a",
+            agent_url,
             json={
                 "jsonrpc": "2.0",
                 "id": "1",
