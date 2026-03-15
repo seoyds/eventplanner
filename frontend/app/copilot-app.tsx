@@ -41,7 +41,7 @@ export default function CopilotApp() {
     process.env.NEXT_PUBLIC_CONDUCTOR_URL || "http://localhost:8000/ag-ui";
 
   return (
-    <CopilotKit runtimeUrl={runtimeUrl} agent="conductor">
+    <CopilotKit runtimeUrl={runtimeUrl}>
       <div className="flex h-screen">
         <div className="flex-1">
           <CopilotChat
