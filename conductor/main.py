@@ -31,15 +31,31 @@ app.add_middleware(
 
 
 @app.post("/ag-ui")
-async def ag_ui_endpoint(input_data: RunAgentInput, request: Request):
-    """AG-UI endpoint. CopilotKit sends messages here. Returns SSE stream."""
+async def ag_ui_endpoint(request: Request):
+    """AG-UI endpoint. CopilotKit sends messages here. Returns SSE stream.
+
+    CopilotKit wraps the payload in {"method", "params", "body"}.
+    We extract "body" and parse it as RunAgentInput.
+    """
     accept_header = request.headers.get("accept")
+    raw = await request.json()
+
+    # CopilotKit envelope: unwrap "body" if present
+    body = raw.get("body", raw)
+    input_data = RunAgentInput(**body)
 
     user_message = ""
     for msg in reversed(input_data.messages):
         if msg.role == "user":
             if msg.content:
-                user_message = msg.content[0].text if hasattr(msg.content[0], "text") else str(msg.content[0])
+                # content can be a string or list of content blocks
+                if isinstance(msg.content, str):
+                    user_message = msg.content
+                elif isinstance(msg.content, list) and msg.content:
+                    first = msg.content[0]
+                    user_message = first.text if hasattr(first, "text") else str(first)
+                else:
+                    user_message = str(msg.content)
             break
 
     async def event_stream():
