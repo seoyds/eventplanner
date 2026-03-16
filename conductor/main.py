@@ -1,5 +1,9 @@
-"""FastAPI server with AG-UI SSE endpoint for the Conductor."""
+"""FastAPI server with AG-UI SSE endpoint for the Conductor.
+
+Streams both AG-UI text events and A2UI surface events for rich UI rendering.
+"""
 import asyncio
+import json
 import uuid
 import uvicorn
 from fastapi import FastAPI, Request
@@ -18,6 +22,7 @@ from ag_ui.core import (
 from ag_ui.encoder import EventEncoder
 
 from conductor.orchestrator import run_orchestrator, TextEvent, AgentStatusEvent
+from conductor.a2ui_builder import build_a2ui_surface
 
 app = FastAPI(title="Event Orchestrator Conductor")
 
@@ -121,6 +126,11 @@ async def ag_ui_endpoint(request: Request):
                                 snapshot={"agent_statuses": {event.agent_id: event.status}},
                             )
                         ))
+                        # Build A2UI surface when an agent completes
+                        if event.status == "completed" and hasattr(event, 'result'):
+                            a2ui_messages = _try_build_a2ui(event.agent_id, event.result)
+                            if a2ui_messages:
+                                await event_queue.put(_encode_a2ui_event(encoder, a2ui_messages))
             except Exception as e:
                 await event_queue.put(encoder.encode(
                     TextMessageContentEvent(
@@ -170,6 +180,57 @@ async def ag_ui_endpoint(request: Request):
         )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _try_build_a2ui(agent_id: str, result_data: dict) -> list[dict] | None:
+    """Try to build A2UI surface from an agent's result data."""
+    try:
+        # The result may be nested in A2A task wrapper
+        agent_result = None
+        if isinstance(result_data, dict):
+            status = result_data.get("status", {})
+            message = status.get("message", {}) if isinstance(status, dict) else {}
+            parts = message.get("parts", []) if isinstance(message, dict) else []
+            if parts:
+                for part in parts:
+                    if isinstance(part, dict) and part.get("kind") == "text":
+                        try:
+                            agent_result = json.loads(part["text"])
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+
+            if not agent_result:
+                artifacts = result_data.get("artifacts", [])
+                if isinstance(artifacts, list):
+                    for artifact in artifacts:
+                        a_parts = artifact.get("parts", []) if isinstance(artifact, dict) else []
+                        for part in a_parts:
+                            if isinstance(part, dict) and part.get("kind") == "text":
+                                try:
+                                    agent_result = json.loads(part["text"])
+                                except (json.JSONDecodeError, KeyError):
+                                    pass
+
+            if not agent_result and "result" in result_data:
+                agent_result = result_data
+            elif not agent_result:
+                agent_result = {"result": result_data, "status": "completed"}
+
+        if agent_result:
+            return build_a2ui_surface(agent_id, agent_result)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+    return None
+
+
+def _encode_a2ui_event(encoder: EventEncoder, a2ui_messages: list[dict]) -> str:
+    """Encode A2UI messages as a custom SSE event."""
+    return encoder.encode(
+        StateSnapshotEvent(
+            type=EventType.STATE_SNAPSHOT,
+            snapshot={"a2ui_messages": a2ui_messages},
+        )
+    )
 
 
 if __name__ == "__main__":
