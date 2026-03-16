@@ -1,4 +1,8 @@
-"""FastAPI server with AG-UI SSE endpoint for the Conductor."""
+"""FastAPI server with AG-UI SSE endpoint for the Conductor.
+
+Streams both AG-UI text events and A2UI surface events for rich UI rendering.
+"""
+import json
 import uuid
 import uvicorn
 from fastapi import FastAPI, Request
@@ -18,6 +22,7 @@ from ag_ui.encoder import EventEncoder
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock, ToolResultBlock
 
 from conductor.orchestrator import run_orchestrator
+from conductor.a2ui_builder import build_a2ui_surface
 
 app = FastAPI(title="Event Orchestrator Conductor")
 
@@ -105,6 +110,8 @@ async def ag_ui_endpoint(request: Request):
 
         # Track agents currently running — mark completed when next message arrives
         running_agents: list[str] = []
+        # Track pending tool use IDs to match with tool results for A2UI
+        pending_agent_calls: dict[str, str] = {}  # tool_use_id -> agent_id
 
         async for sdk_message in run_orchestrator(conversation):
             if isinstance(sdk_message, AssistantMessage):
@@ -136,12 +143,24 @@ async def ag_ui_endpoint(request: Request):
                             except Exception:
                                 agent_id = "unknown"
                             running_agents.append(agent_id)
+                            # Track this tool use for A2UI rendering on result
+                            if hasattr(block, "id"):
+                                pending_agent_calls[block.id] = agent_id
                             yield encoder.encode(
                                 StateSnapshotEvent(
                                     type=EventType.STATE_SNAPSHOT,
                                     snapshot={"agent_statuses": {agent_id: "running"}},
                                 )
                             )
+                    elif isinstance(block, ToolResultBlock):
+                        # When an agent call returns, build A2UI surface from the result
+                        tool_use_id = getattr(block, "tool_use_id", None)
+                        if tool_use_id and tool_use_id in pending_agent_calls:
+                            agent_id = pending_agent_calls.pop(tool_use_id)
+                            a2ui_messages = _extract_a2ui_from_tool_result(agent_id, block)
+                            if a2ui_messages:
+                                yield _encode_a2ui_event(encoder, a2ui_messages)
+
             elif isinstance(sdk_message, ResultMessage):
                 # Final message — mark any remaining agents as completed
                 for agent_name in running_agents:
@@ -168,6 +187,78 @@ async def ag_ui_endpoint(request: Request):
         )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _extract_a2ui_from_tool_result(agent_id: str, block: ToolResultBlock) -> list[dict] | None:
+    """Try to parse an agent result from a tool result block and build A2UI surface."""
+    try:
+        text = ""
+        if hasattr(block, "content"):
+            if isinstance(block.content, str):
+                text = block.content
+            elif isinstance(block.content, list) and block.content:
+                first = block.content[0]
+                text = first.text if hasattr(first, "text") else str(first)
+        if not text:
+            return None
+
+        data = json.loads(text)
+        # call_agent returns {"agent_id": ..., "result": {...}}
+        result_data = data.get("result", data)
+
+        # The A2A result may be nested — dig into artifacts for the agent result JSON
+        agent_result = None
+        if isinstance(result_data, dict):
+            # Check for A2A task wrapper: result.status.message.parts[0].text
+            status = result_data.get("status", {})
+            message = status.get("message", {}) if isinstance(status, dict) else {}
+            parts = message.get("parts", []) if isinstance(message, dict) else []
+            if parts:
+                for part in parts:
+                    if isinstance(part, dict) and part.get("kind") == "text":
+                        try:
+                            agent_result = json.loads(part["text"])
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+
+            # Also check artifacts
+            if not agent_result:
+                artifacts = result_data.get("artifacts", [])
+                if isinstance(artifacts, list):
+                    for artifact in artifacts:
+                        parts = artifact.get("parts", []) if isinstance(artifact, dict) else []
+                        for part in parts:
+                            if isinstance(part, dict) and part.get("kind") == "text":
+                                try:
+                                    agent_result = json.loads(part["text"])
+                                except (json.JSONDecodeError, KeyError):
+                                    pass
+
+            # Fallback: the result itself might be the agent result
+            if not agent_result and "result" in result_data:
+                agent_result = result_data
+            elif not agent_result:
+                agent_result = {"result": result_data, "status": "completed"}
+
+        if agent_result:
+            return build_a2ui_surface(agent_id, agent_result)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+    return None
+
+
+def _encode_a2ui_event(encoder: EventEncoder, a2ui_messages: list[dict]) -> str:
+    """Encode A2UI messages as a custom SSE event.
+
+    Uses STATE_SNAPSHOT event type with an 'a2ui' key in the snapshot
+    so the frontend can detect and process A2UI surfaces.
+    """
+    return encoder.encode(
+        StateSnapshotEvent(
+            type=EventType.STATE_SNAPSHOT,
+            snapshot={"a2ui_messages": a2ui_messages},
+        )
+    )
 
 
 if __name__ == "__main__":

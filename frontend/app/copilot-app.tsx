@@ -1,11 +1,20 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
+import ReactMarkdown from "react-markdown";
+import {
+  A2UISurfaceRenderer,
+  parseA2UIMessages,
+  type A2UISurface,
+  type A2UIMessage,
+} from "./components/a2ui-renderer";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** A2UI surfaces attached to this assistant message */
+  surfaces: A2UISurface[];
 }
 
 interface AgentStatuses {
@@ -31,6 +40,7 @@ export default function CopilotApp() {
       id: crypto.randomUUID(),
       role: "user",
       content: input.trim(),
+      surfaces: [],
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
@@ -40,7 +50,7 @@ export default function CopilotApp() {
     const assistantId = crypto.randomUUID();
     setMessages((prev) => [
       ...prev,
-      { id: assistantId, role: "assistant", content: "" },
+      { id: assistantId, role: "assistant", content: "", surfaces: [] },
     ]);
 
     const fetchController = new AbortController();
@@ -90,12 +100,8 @@ export default function CopilotApp() {
           if (!line.startsWith("data: ")) continue;
           try {
             const event = JSON.parse(line.slice(6));
-            if (
-              event.type === "TEXT_MESSAGE_CONTENT" &&
-              event.messageId === assistantId.toString()
-            ) {
-              // Skip — messageId won't match since server generates its own
-            }
+
+            // Text content streaming
             if (event.type === "TEXT_MESSAGE_CONTENT") {
               setMessages((prev) =>
                 prev.map((m) =>
@@ -105,11 +111,40 @@ export default function CopilotApp() {
                 )
               );
             }
-            if (event.type === "STATE_SNAPSHOT" && event.snapshot?.agent_statuses) {
-              setAgentStatuses((prev) => ({
-                ...prev,
-                ...event.snapshot.agent_statuses,
-              }));
+
+            // State snapshots: agent statuses and A2UI surfaces
+            if (event.type === "STATE_SNAPSHOT") {
+              if (event.snapshot?.agent_statuses) {
+                setAgentStatuses((prev) => ({
+                  ...prev,
+                  ...event.snapshot.agent_statuses,
+                }));
+              }
+
+              // A2UI surface messages
+              if (event.snapshot?.a2ui_messages) {
+                const a2uiMsgs = event.snapshot.a2ui_messages as A2UIMessage[];
+                setMessages((prev) =>
+                  prev.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    // Find or create the surface
+                    const surfaceId = _extractSurfaceId(a2uiMsgs);
+                    const existing = m.surfaces.find(
+                      (s) => s.surfaceId === surfaceId
+                    );
+                    const updated = parseA2UIMessages(
+                      a2uiMsgs,
+                      existing || undefined
+                    );
+                    const newSurfaces = existing
+                      ? m.surfaces.map((s) =>
+                          s.surfaceId === surfaceId ? updated : s
+                        )
+                      : [...m.surfaces, updated];
+                    return { ...m, surfaces: newSurfaces };
+                  })
+                );
+              }
             }
           } catch {
             // skip non-JSON lines
@@ -117,7 +152,6 @@ export default function CopilotApp() {
         }
       }
     } catch (err) {
-      // Append error to existing content (don't replace partial results)
       const errMsg = err instanceof Error && err.name === "AbortError"
         ? "\n\n[Timed out — partial results shown above]"
         : `\n\n[Error: ${err}]`;
@@ -135,11 +169,11 @@ export default function CopilotApp() {
   };
 
   return (
-    <div className="flex h-screen bg-white">
+    <div className="flex h-screen bg-gray-50">
       {/* Chat Panel */}
-      <div className="flex-1 flex flex-col">
-        <div className="border-b px-6 py-4">
-          <h1 className="text-xl font-semibold">Event Orchestrator</h1>
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="border-b bg-white px-6 py-4 shadow-sm">
+          <h1 className="text-xl font-semibold text-gray-900">Event Orchestrator</h1>
           <p className="text-sm text-gray-500">
             Describe your event — 10 specialist agents will plan it!
           </p>
@@ -152,22 +186,24 @@ export default function CopilotApp() {
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
-                className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                className={`max-w-[85%] rounded-xl px-4 py-3 ${
                   msg.role === "user"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-900"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "bg-white text-gray-900 shadow-sm border border-gray-100"
                 }`}
               >
-                <pre className="whitespace-pre-wrap font-sans text-sm">
-                  {msg.content || (isStreaming ? "Thinking..." : "")}
-                </pre>
+                {msg.role === "user" ? (
+                  <p className="text-sm">{msg.content}</p>
+                ) : (
+                  <AssistantMessageContent message={msg} isStreaming={isStreaming} />
+                )}
               </div>
             </div>
           ))}
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="border-t px-6 py-4">
+        <div className="border-t bg-white px-6 py-4">
           <div className="flex gap-2">
             <input
               type="text"
@@ -175,13 +211,13 @@ export default function CopilotApp() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && sendMessage()}
               placeholder="Describe your event..."
-              className="flex-1 rounded-lg border px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 rounded-xl border border-gray-300 px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               disabled={isStreaming}
             />
             <button
               onClick={sendMessage}
               disabled={isStreaming || !input.trim()}
-              className="rounded-lg bg-blue-600 px-6 py-2 text-white font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="rounded-xl bg-blue-600 px-6 py-2.5 text-white font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
             >
               {isStreaming ? "Planning..." : "Send"}
             </button>
@@ -190,17 +226,17 @@ export default function CopilotApp() {
       </div>
 
       {/* Agent Status Panel */}
-      <div className="w-80 border-l bg-gray-50 p-4 space-y-3 overflow-y-auto">
-        <h2 className="font-bold text-lg">Agent Status</h2>
+      <div className="w-80 border-l bg-white p-4 space-y-3 overflow-y-auto shadow-sm">
+        <h2 className="font-bold text-lg text-gray-900">Agent Status</h2>
         {Object.keys(agentStatuses).length === 0 ? (
           <p className="text-sm text-gray-400">
             Agents will appear here when active...
           </p>
         ) : (
           Object.entries(agentStatuses).map(([id, status]) => (
-            <div key={id} className="flex items-center gap-2 text-sm">
+            <div key={id} className="flex items-center gap-2.5 text-sm py-1">
               <span
-                className={`w-2 h-2 rounded-full ${
+                className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                   status === "completed"
                     ? "bg-green-500"
                     : status === "running"
@@ -210,12 +246,72 @@ export default function CopilotApp() {
                     : "bg-gray-300"
                 }`}
               />
-              <span className="capitalize">{id.replace(/_/g, " ")}</span>
-              <span className="text-gray-400 text-xs">{status}</span>
+              <span className="capitalize font-medium text-gray-700">
+                {id.replace(/_/g, " ")}
+              </span>
+              <span className="text-gray-400 text-xs ml-auto">{status}</span>
             </div>
           ))
         )}
       </div>
     </div>
   );
+}
+
+// ─── Assistant Message with A2UI + Markdown rendering ───────────────────────
+
+function AssistantMessageContent({
+  message,
+  isStreaming,
+}: {
+  message: Message;
+  isStreaming: boolean;
+}) {
+  const hasContent = message.content.trim().length > 0;
+  const hasSurfaces = message.surfaces.length > 0;
+
+  if (!hasContent && !hasSurfaces) {
+    return (
+      <p className="text-sm text-gray-400 animate-pulse">
+        {isStreaming ? "Thinking..." : ""}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Rendered markdown text */}
+      {hasContent && (
+        <div className="prose prose-sm prose-gray max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+          <ReactMarkdown>{message.content}</ReactMarkdown>
+        </div>
+      )}
+
+      {/* A2UI Surfaces */}
+      {hasSurfaces && (
+        <div className="space-y-4 mt-3">
+          {message.surfaces.map((surface) => (
+            <A2UISurfaceRenderer
+              key={surface.surfaceId}
+              surface={surface}
+              onAction={(actionName, context) => {
+                console.log("A2UI action:", actionName, context);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function _extractSurfaceId(messages: A2UIMessage[]): string {
+  for (const msg of messages) {
+    if (msg.createSurface?.surfaceId) return msg.createSurface.surfaceId;
+    if (msg.updateComponents?.surfaceId) return msg.updateComponents.surfaceId;
+    if (msg.updateDataModel?.surfaceId) return msg.updateDataModel.surfaceId;
+  }
+  return "default";
 }
