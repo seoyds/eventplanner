@@ -46,8 +46,11 @@ export default function CopilotApp() {
     const fetchController = new AbortController();
     const fetchTimeout = setTimeout(() => fetchController.abort(), 10 * 60 * 1000); // 10 min
 
+    // Call conductor directly (bypasses Next.js proxy buffering)
+    const conductorUrl = process.env.NEXT_PUBLIC_CONDUCTOR_URL || "http://localhost:8000";
+
     try {
-      const resp = await fetch("/api/copilotkit", {
+      const resp = await fetch(`${conductorUrl}/ag-ui`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

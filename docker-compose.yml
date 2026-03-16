@@ -27,6 +27,7 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - NANDA_REGISTRY_URL=http://nanda-registry:6900
+      - CLAUDE_CODE_STREAM_CLOSE_TIMEOUT=600000
     volumes: &claude-creds
       - ${HOME}/.claude:/root/.claude:ro
     depends_on:
@@ -152,6 +153,7 @@ services:
     ports: ["3000:3000"]
     environment:
       - CONDUCTOR_INTERNAL_URL=http://conductor:8000
+      - NEXT_PUBLIC_CONDUCTOR_URL=http://localhost:8000
     depends_on:
       - conductor
 

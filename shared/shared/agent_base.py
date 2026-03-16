@@ -77,7 +77,7 @@ class BaseEventAgent:
         result_text = ""
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, ResultMessage):
-                result_text = message.result
+                result_text = message.result or result_text
             elif isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -108,6 +108,12 @@ produce your analysis. Return your output as a JSON object with these fields:
 
     def _parse_result(self, text: str) -> AgentResult:
         """Parse Claude's response into an AgentResult."""
+        if not text:
+            return AgentResult(
+                agent_id=self.agent_id,
+                status=AgentStatus.COMPLETED,
+                result={"raw_response": "No response from agent"},
+            )
         try:
             json_match = re.search(r"\{[\s\S]*\}", text)
             if json_match:

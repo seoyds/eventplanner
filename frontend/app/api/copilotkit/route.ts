@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // 5 minutes max for agent orchestration
+export const maxDuration = 600; // 10 minutes max for agent orchestration
 
 const CONDUCTOR_URL =
   process.env.CONDUCTOR_INTERNAL_URL || "http://localhost:8000";
@@ -21,14 +21,39 @@ export async function POST(req: NextRequest) {
       },
       body,
       signal: controller.signal,
+      keepalive: true,
     });
 
-    return new Response(resp.body, {
+    // Actively read and forward chunks to prevent idle timeouts at every layer
+    const upstream = resp.body;
+    if (!upstream) {
+      return new Response("No upstream body", { status: 502 });
+    }
+
+    const stream = new ReadableStream({
+      async start(ctrl) {
+        const reader = upstream.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            ctrl.enqueue(value);
+          }
+        } catch {
+          // upstream closed or errored — close gracefully
+        } finally {
+          ctrl.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
       status: resp.status,
       headers: {
-        "Content-Type": resp.headers.get("content-type") || "text/event-stream",
-        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
       },
     });
   } finally {

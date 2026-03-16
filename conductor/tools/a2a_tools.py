@@ -100,30 +100,50 @@ async def call_agent(args):
     requirements = json.loads(args["requirements"])
     context = json.loads(args["context"]) if args.get("context") else {}
 
-    agent_url = await _resolve_agent_url(agent_id)
+    try:
+        agent_url = await _resolve_agent_url(agent_id)
+    except RuntimeError as e:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "agent_id": agent_id,
+            "error": str(e),
+            "result": {},
+        })}]}
 
     # A2A protocol: use message/send with a Message containing TextPart
     message_payload = json.dumps({"requirements": requirements, "context": context})
-    async with httpx.AsyncClient(timeout=300) as client:
-        resp = await client.post(
-            agent_url,
-            json={
-                "jsonrpc": "2.0",
-                "id": "1",
-                "method": "message/send",
-                "params": {
-                    "message": {
-                        "role": "user",
-                        "messageId": f"msg-{agent_id}",
-                        "kind": "message",
-                        "parts": [{"kind": "text", "text": message_payload}],
-                    }
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            resp = await client.post(
+                agent_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "method": "message/send",
+                    "params": {
+                        "message": {
+                            "role": "user",
+                            "messageId": f"msg-{agent_id}",
+                            "kind": "message",
+                            "parts": [{"kind": "text", "text": message_payload}],
+                        }
+                    },
                 },
-            },
-        )
-        resp_data = resp.json()
-        # Extract result from A2A response — could be in result.artifacts or result itself
-        result = resp_data.get("result", {})
+            )
+            resp_data = resp.json()
+            # Extract result from A2A response — could be in result.artifacts or result itself
+            result = resp_data.get("result", {})
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "agent_id": agent_id,
+            "error": f"Failed to reach agent '{agent_id}': {type(e).__name__}: {e}",
+            "result": {},
+        })}]}
+    except Exception as e:
+        return {"content": [{"type": "text", "text": json.dumps({
+            "agent_id": agent_id,
+            "error": f"Unexpected error calling agent '{agent_id}': {type(e).__name__}: {e}",
+            "result": {},
+        })}]}
 
     return {"content": [{"type": "text", "text": json.dumps({
         "agent_id": agent_id,

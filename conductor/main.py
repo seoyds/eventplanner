@@ -1,4 +1,5 @@
 """FastAPI server with AG-UI SSE endpoint for the Conductor."""
+import asyncio
 import uuid
 import uvicorn
 from fastapi import FastAPI, Request
@@ -15,9 +16,8 @@ from ag_ui.core import (
     StateSnapshotEvent,
 )
 from ag_ui.encoder import EventEncoder
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock, ToolResultBlock
 
-from conductor.orchestrator import run_orchestrator
+from conductor.orchestrator import run_orchestrator, TextEvent, AgentStatusEvent
 
 app = FastAPI(title="Event Orchestrator Conductor")
 
@@ -45,11 +45,7 @@ async def ag_ui_info():
 
 @app.post("/ag-ui")
 async def ag_ui_endpoint(request: Request):
-    """AG-UI endpoint. CopilotKit sends messages here. Returns SSE stream.
-
-    CopilotKit wraps the payload in {"method", "params", "body"}.
-    We extract "body" and parse it as RunAgentInput.
-    """
+    """AG-UI endpoint. CopilotKit sends messages here. Returns SSE stream."""
     accept_header = request.headers.get("accept")
     raw = await request.json()
 
@@ -103,55 +99,61 @@ async def ag_ui_endpoint(request: Request):
             )
         )
 
-        # Track agents currently running — mark completed when next message arrives
-        running_agents: list[str] = []
+        # Use an async queue to interleave orchestrator events with keepalives
+        event_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-        async for sdk_message in run_orchestrator(conversation):
-            if isinstance(sdk_message, AssistantMessage):
-                # Mark previously running agents as completed
-                for agent_name in running_agents:
-                    yield encoder.encode(
-                        StateSnapshotEvent(
-                            type=EventType.STATE_SNAPSHOT,
-                            snapshot={"agent_statuses": {agent_name: "completed"}},
-                        )
-                    )
-                running_agents.clear()
-
-                for block in sdk_message.content:
-                    if isinstance(block, TextBlock):
-                        yield encoder.encode(
+        async def orchestrator_producer():
+            """Run the orchestrator and push encoded events into the queue."""
+            try:
+                async for event in run_orchestrator(conversation):
+                    if isinstance(event, TextEvent):
+                        await event_queue.put(encoder.encode(
                             TextMessageContentEvent(
                                 type=EventType.TEXT_MESSAGE_CONTENT,
                                 message_id=msg_id,
-                                delta=block.text,
+                                delta=event.text,
                             )
-                        )
-                    elif isinstance(block, ToolUseBlock):
-                        tool_name = block.name
-                        # Generic call_agent tool — extract agent_id from the input
-                        if tool_name.endswith("call_agent"):
-                            try:
-                                agent_id = block.input.get("agent_id", "unknown") if hasattr(block, "input") else "unknown"
-                            except Exception:
-                                agent_id = "unknown"
-                            running_agents.append(agent_id)
-                            yield encoder.encode(
-                                StateSnapshotEvent(
-                                    type=EventType.STATE_SNAPSHOT,
-                                    snapshot={"agent_statuses": {agent_id: "running"}},
-                                )
+                        ))
+                    elif isinstance(event, AgentStatusEvent):
+                        await event_queue.put(encoder.encode(
+                            StateSnapshotEvent(
+                                type=EventType.STATE_SNAPSHOT,
+                                snapshot={"agent_statuses": {event.agent_id: event.status}},
                             )
-            elif isinstance(sdk_message, ResultMessage):
-                # Final message — mark any remaining agents as completed
-                for agent_name in running_agents:
-                    yield encoder.encode(
-                        StateSnapshotEvent(
-                            type=EventType.STATE_SNAPSHOT,
-                            snapshot={"agent_statuses": {agent_name: "completed"}},
-                        )
+                        ))
+            except Exception as e:
+                await event_queue.put(encoder.encode(
+                    TextMessageContentEvent(
+                        type=EventType.TEXT_MESSAGE_CONTENT,
+                        message_id=msg_id,
+                        delta=f"\n\n**Error:** {type(e).__name__}: {e}",
                     )
-                running_agents.clear()
+                ))
+            finally:
+                await event_queue.put(None)
+
+        # Start the orchestrator in a background task
+        producer_task = asyncio.create_task(orchestrator_producer())
+
+        # Consume events from the queue, sending keepalives during idle periods
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=5)
+                except asyncio.TimeoutError:
+                    # No event for 5s — send SSE keepalive to prevent connection drop
+                    yield ": keepalive\n\n"
+                    continue
+
+                if event is None:
+                    break
+                yield event
+        finally:
+            producer_task.cancel()
+            try:
+                await producer_task
+            except asyncio.CancelledError:
+                pass
 
         yield encoder.encode(
             TextMessageEndEvent(
@@ -171,4 +173,4 @@ async def ag_ui_endpoint(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=600)

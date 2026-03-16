@@ -6,18 +6,13 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 def test_all_agent_tools_registered():
     tool_names = [t.name for t in AGENT_TOOLS]
-    expected = [
-        "call_venue_agent", "call_weather_agent", "call_budget_agent",
-        "call_menu_agent", "call_activity_agent", "call_accessibility_agent",
-        "call_theme_agent", "call_logistics_agent", "call_communication_agent",
-        "call_supplies_agent", "check_budget",
-    ]
+    expected = ["discover_agents", "call_agent", "check_budget"]
     for name in expected:
         assert name in tool_names, f"Missing tool: {name}"
 
 
 def test_agent_tools_count():
-    assert len(AGENT_TOOLS) == 11
+    assert len(AGENT_TOOLS) == 3
 
 
 @pytest.mark.asyncio

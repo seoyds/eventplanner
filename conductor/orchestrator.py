@@ -1,82 +1,200 @@
-"""Conductor orchestration logic using claude-agent-sdk.
+"""Conductor orchestration logic.
 
-Single-turn flow: discover agents → present plan → execute immediately.
-No confirmation step — the conductor discovers, plans, and executes
-all in one shot.
+Multi-phase flow that keeps each Claude SDK session short to avoid
+CLI subprocess timeout (CLIConnectionError).
+
+Phase 1: Short query() — discover agents, generate plan text
+Phase 2: Direct httpx calls — call each agent via A2A (no SDK)
+Phase 3: Short query() — compile results into final blueprint
 """
-from claude_agent_sdk import query, ClaudeAgentOptions, create_sdk_mcp_server
-from conductor.tools.a2a_tools import AGENT_TOOLS
+import json
+import httpx
+from dataclasses import dataclass
 
-CONDUCTOR_SYSTEM_PROMPT = """You are the Event Orchestrator Conductor. You dynamically
-discover and coordinate specialist agents to plan events.
+from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage, TextBlock
+from shared.nanda_registry import NandaRegistryClient
 
-## Your Process (ALL IN ONE GO — do not wait for confirmation)
 
-### Step 1: Discover
-Use the `discover_agents` tool to find available specialist agents in the registry.
+@dataclass
+class TextEvent:
+    """A chunk of text to stream to the frontend."""
+    text: str
 
-### Step 2: Plan
-Based on available agents and the user's request:
-- Briefly present your plan: which agents you'll use and in what order
-- Organize into waves (independent agents first, then dependent ones)
-- If NO suitable agents exist, tell the user and stop
 
-### Step 3: Execute IMMEDIATELY
-Do NOT wait for user confirmation. After presenting the plan, execute it right away:
-1. Call agents wave by wave using `call_agent`
-2. For each agent call, pass:
-   - agent_id: the agent's ID from the registry
-   - requirements: JSON string with the event requirements from the user's request
-   - context: JSON string with results from previously completed agents (empty "{}" for Wave 1)
-3. After each wave, use `check_budget` if a budget was specified
-4. Pass results from earlier waves as context to later waves
+@dataclass
+class AgentStatusEvent:
+    """An agent status change to stream to the frontend."""
+    agent_id: str
+    status: str  # "running", "completed", "error"
 
-### Step 4: Compile Blueprint
-After all agents complete, compile everything into a comprehensive Event Blueprint.
-Present it in a clear, structured format with sections for each aspect of the event.
 
-## Tools
-- `discover_agents`: Query NANDA registry. Pass query="all".
-- `call_agent`: Call agent by ID. Pass requirements and context as JSON strings.
-- `check_budget`: Validate costs against budget limit.
+# Agents that can run independently (Wave 1) vs those needing prior context (Wave 2/3)
+WAVE_1 = ["theme", "venue", "menu", "weather", "activity", "supplies"]
+WAVE_2 = ["accessibility", "logistics", "communication"]
+WAVE_3 = ["budget"]
 
-## Critical Rules
-- ALWAYS discover agents first — never assume what's available
-- ALWAYS use `call_agent` to delegate work — do NOT answer questions yourself
-- If an agent returns an error or empty result, note it and continue with other agents
-- Pass ALL prior agent results as context to later agents so they can build on each other
-"""
+
+async def _discover_agents() -> dict[str, dict]:
+    """Discover agents from NANDA registry and fetch their cards."""
+    nanda = NandaRegistryClient()
+    agents = await nanda.list_agents()
+    if not agents:
+        return {}
+
+    details = {}
+    for agent_id, agent_url in agents.items():
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{agent_url}/.well-known/agent.json")
+                if resp.status_code == 200:
+                    card = resp.json()
+                    details[agent_id] = {
+                        "url": agent_url,
+                        "name": card.get("name", agent_id),
+                        "description": card.get("description", ""),
+                    }
+                else:
+                    details[agent_id] = {"url": agent_url, "name": agent_id, "description": ""}
+        except Exception:
+            details[agent_id] = {"url": agent_url, "name": agent_id, "description": "unreachable"}
+    return details
+
+
+async def _call_agent(agent_url: str, agent_id: str, requirements: dict, context: dict) -> dict:
+    """Call a specialist agent via A2A protocol (direct httpx, no SDK)."""
+    message_payload = json.dumps({"requirements": requirements, "context": context})
+    async with httpx.AsyncClient(timeout=600) as client:
+        resp = await client.post(
+            agent_url,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "message/send",
+                "params": {
+                    "message": {
+                        "role": "user",
+                        "messageId": f"msg-{agent_id}",
+                        "kind": "message",
+                        "parts": [{"kind": "text", "text": message_payload}],
+                    }
+                },
+            },
+        )
+        data = resp.json()
+        return data.get("result", {})
+
+
+async def _short_query(prompt: str, system: str) -> str:
+    """Run a short Claude query (no tools, max 1 turn) and return the text."""
+    options = ClaudeAgentOptions(
+        system_prompt=system,
+        max_turns=1,
+        permission_mode="acceptEdits",
+    )
+    result_text = ""
+    async for message in query(prompt=prompt, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    result_text += block.text
+        elif isinstance(message, ResultMessage):
+            if message.result:
+                result_text = message.result
+    return result_text
 
 
 async def run_orchestrator(conversation: list[dict]):
-    """Run the conductor using stateless query().
+    """Run the multi-phase conductor.
 
-    Args:
-        conversation: List of {"role": "user"|"assistant", "content": "..."} dicts
-
-    Yields SDK messages for streaming to the frontend.
+    Yields TextEvent and AgentStatusEvent for streaming to the frontend.
     """
-    conductor_tools = create_sdk_mcp_server(
-        name="conductor-tools",
-        tools=AGENT_TOOLS,
-    )
-
-    allowed = [f"mcp__conductor-tools__{t.name}" for t in AGENT_TOOLS]
-
-    options = ClaudeAgentOptions(
-        system_prompt=CONDUCTOR_SYSTEM_PROMPT,
-        mcp_servers={"conductor-tools": conductor_tools},
-        allowed_tools=allowed + ["WebSearch"],
-        max_turns=50,
-        permission_mode="acceptEdits",
-    )
-
-    # Use the latest user message as the prompt
-    prompt = ""
+    # Extract the latest user message
+    user_message = ""
     for msg in reversed(conversation):
         if msg.get("role") == "user":
-            prompt = msg.get("content", "")
+            user_message = msg.get("content", "")
             break
 
-    async for message in query(prompt=prompt, options=options):
-        yield message
+    if not user_message:
+        yield TextEvent(text="Please describe the event you'd like to plan!")
+        return
+
+    # --- Phase 1: Discover agents ---
+    agents = await _discover_agents()
+    if not agents:
+        yield TextEvent(text="No specialist agents are available. Please check that agents are running.")
+        return
+
+    agent_list = "\n".join(
+        f"- **{d['name']}** (`{aid}`): {d['description']}"
+        for aid, d in agents.items()
+    )
+
+    # --- Phase 1b: Generate plan text (short query, no tools) ---
+    plan_text = await _short_query(
+        prompt=f"""User request: {user_message}
+
+Available specialist agents:
+{agent_list}
+
+Create a brief, exciting plan showing which agents you'll use organized into waves.
+Wave 1 (independent): {', '.join(a for a in WAVE_1 if a in agents)}
+Wave 2 (needs Wave 1 context): {', '.join(a for a in WAVE_2 if a in agents)}
+Wave 3 (final): {', '.join(a for a in WAVE_3 if a in agents)}
+
+Keep it concise — just the plan overview. Do NOT execute anything.""",
+        system="You are the Event Orchestrator Conductor. Present a brief plan for coordinating specialist agents. Be enthusiastic but concise.",
+    )
+    yield TextEvent(text=plan_text)
+    yield TextEvent(text="\n\n---\n\n")
+
+    # --- Phase 2: Execute agent calls directly ---
+    # Parse requirements from user message
+    requirements = {"user_request": user_message}
+    all_results: dict[str, dict] = {}
+
+    for wave_name, wave_agents in [("Wave 1", WAVE_1), ("Wave 2", WAVE_2), ("Wave 3", WAVE_3)]:
+        wave_active = [a for a in wave_agents if a in agents]
+        if not wave_active:
+            continue
+
+        yield TextEvent(text=f"\n**{wave_name}** — calling {', '.join(wave_active)}...\n")
+
+        for agent_id in wave_active:
+            agent_info = agents[agent_id]
+            yield AgentStatusEvent(agent_id=agent_id, status="running")
+
+            try:
+                result = await _call_agent(
+                    agent_url=agent_info["url"],
+                    agent_id=agent_id,
+                    requirements=requirements,
+                    context=all_results,
+                )
+                all_results[agent_id] = result
+                yield AgentStatusEvent(agent_id=agent_id, status="completed")
+            except Exception as e:
+                all_results[agent_id] = {"error": f"{type(e).__name__}: {e}"}
+                yield AgentStatusEvent(agent_id=agent_id, status="error")
+                yield TextEvent(text=f"\n> {agent_id} encountered an error: {type(e).__name__}\n")
+
+    # --- Phase 3: Compile blueprint (short query, no tools) ---
+    yield TextEvent(text="\n\n---\n\n**Compiling your Event Blueprint...**\n\n")
+
+    results_summary = json.dumps(all_results, indent=2, default=str)
+    blueprint = await _short_query(
+        prompt=f"""Original request: {user_message}
+
+Here are all the results from the specialist agents:
+{results_summary}
+
+Compile these into a comprehensive, well-organized Event Blueprint.
+Include sections for each aspect (venue, menu, theme, activities, etc.).
+Highlight the top recommendations, total estimated cost vs budget, and any warnings.
+Make it practical and actionable.""",
+        system="""You are the Event Orchestrator Conductor compiling a final Event Blueprint.
+Organize the agent results into a clear, structured, actionable plan.
+Use markdown formatting with headers, bullet points, and tables where appropriate.
+Always include a budget summary comparing estimated costs to the stated budget.""",
+    )
+    yield TextEvent(text=blueprint)
