@@ -390,7 +390,7 @@ def _build_theme_result(
                 "style": "body",
             })
 
-    # DIY ideas as a list
+    # DIY ideas
     diy = result.get("diy_ideas", [])
     if diy:
         components.append({
@@ -400,12 +400,38 @@ def _build_theme_result(
             "style": "h3",
         })
         for i, idea in enumerate(diy):
-            components.append({
-                "id": _id(surface_id, f"diy-{i}"),
-                "component": "Text",
-                "text": {"literalString": f"• {idea}"},
-                "style": "body",
-            })
+            if isinstance(idea, dict):
+                card_id = _id(surface_id, f"diy-{i}")
+                components.append({
+                    "id": card_id,
+                    "component": "Card",
+                    "title": {"literalString": idea.get("item", idea.get("name", f"DIY {i+1}"))},
+                })
+                desc = idea.get("description", "")
+                if desc:
+                    components.append({
+                        "id": _id(card_id, "desc"),
+                        "component": "Text",
+                        "parent": card_id,
+                        "text": {"literalString": desc},
+                        "style": "body",
+                    })
+                idea_cost = idea.get("estimated_cost", 0)
+                if idea_cost:
+                    components.append({
+                        "id": _id(card_id, "cost"),
+                        "component": "KeyValue",
+                        "parent": card_id,
+                        "label": {"literalString": "Est. Cost"},
+                        "value": {"literalString": f"${float(idea_cost):,.0f}"},
+                    })
+            else:
+                components.append({
+                    "id": _id(surface_id, f"diy-{i}"),
+                    "component": "Text",
+                    "text": {"literalString": f"• {idea}"},
+                    "style": "body",
+                })
 
     # Purchased items
     purchased = result.get("purchased_items", [])
@@ -416,13 +442,31 @@ def _build_theme_result(
             "text": {"literalString": "Items to Purchase"},
             "style": "h3",
         })
-        for i, item in enumerate(purchased):
+        # Render as DataTable if items are dicts
+        if purchased and isinstance(purchased[0], dict):
+            rows = []
+            for item in purchased:
+                rows.append({
+                    "item": item.get("item", item.get("name", "")),
+                    "cost": f"${float(item.get('estimated_cost', item.get('cost', 0))):,.0f}",
+                })
             components.append({
-                "id": _id(surface_id, f"purchased-{i}"),
-                "component": "Text",
-                "text": {"literalString": f"• {item}"},
-                "style": "body",
+                "id": _id(surface_id, "purchased-table"),
+                "component": "DataTable",
+                "columns": [
+                    {"key": "item", "label": "Item"},
+                    {"key": "cost", "label": "Cost", "align": "right"},
+                ],
+                "rows": rows,
             })
+        else:
+            for i, item in enumerate(purchased):
+                components.append({
+                    "id": _id(surface_id, f"purchased-{i}"),
+                    "component": "Text",
+                    "text": {"literalString": f"• {item}"},
+                    "style": "body",
+                })
 
     _append_cost_and_warnings(components, surface_id, cost, warnings)
     return components
@@ -590,10 +634,11 @@ def _build_supplies_result(
             "style": "h3",
         })
         for i, item in enumerate(shopping_list):
+            item_text = _format_list_item(item)
             components.append({
                 "id": _id(surface_id, f"shop-{i}"),
                 "component": "Text",
-                "text": {"literalString": f"• {item}"},
+                "text": {"literalString": f"• {item_text}"},
                 "style": "body",
             })
 
@@ -986,7 +1031,7 @@ def _build_generic_result(
                         "id": _id(card_id, f"item-{kv_index}-{li}"),
                         "component": "Text",
                         "parent": card_id,
-                        "text": {"literalString": f"• {json.dumps(item, default=str) if isinstance(item, dict) else str(item)}"},
+                        "text": {"literalString": f"• {_format_list_item(item)}"},
                         "style": "body",
                     })
         else:
@@ -1004,6 +1049,26 @@ def _build_generic_result(
 
 
 # ── Shared Helpers ───────────────────────────────────────────────────────────
+
+def _format_list_item(item: Any) -> str:
+    """Format a list item for display — extract name/description from dicts."""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        # Try common name fields
+        name = item.get("item", item.get("name", item.get("title", "")))
+        desc = item.get("description", "")
+        cost = item.get("estimated_cost", item.get("cost", 0))
+        parts = []
+        if name:
+            parts.append(str(name))
+        if desc:
+            parts.append(str(desc)[:150])
+        if cost:
+            parts.append(f"(${float(cost):,.0f})")
+        return " — ".join(parts) if parts else str(item)
+    return str(item)
+
 
 def _append_cost_and_warnings(
     components: list[dict], surface_id: str, cost: float, warnings: list[str]
