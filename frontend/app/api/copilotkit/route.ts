@@ -24,15 +24,32 @@ export async function POST(req: NextRequest) {
       keepalive: true,
     });
 
-    // Actively read and forward chunks to prevent idle timeouts at every layer
+    // Actively read and forward chunks with proxy-level keepalives
+    // to prevent Cloudflare/browser from dropping idle SSE connections
     const upstream = resp.body;
     if (!upstream) {
       return new Response("No upstream body", { status: 502 });
     }
 
+    const encoder = new TextEncoder();
+    const KEEPALIVE = encoder.encode(": keepalive\n\n");
+    const KEEPALIVE_INTERVAL = 5000; // 5 seconds
+
     const stream = new ReadableStream({
       async start(ctrl) {
         const reader = upstream.getReader();
+        let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+        // Send keepalives while waiting for upstream data
+        keepaliveTimer = setInterval(() => {
+          try {
+            ctrl.enqueue(KEEPALIVE);
+          } catch {
+            // stream already closed
+            if (keepaliveTimer) clearInterval(keepaliveTimer);
+          }
+        }, KEEPALIVE_INTERVAL);
+
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -42,6 +59,7 @@ export async function POST(req: NextRequest) {
         } catch {
           // upstream closed or errored — close gracefully
         } finally {
+          if (keepaliveTimer) clearInterval(keepaliveTimer);
           ctrl.close();
         }
       },
