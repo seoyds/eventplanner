@@ -307,6 +307,610 @@ def _build_weather_result(
     return components
 
 
+# ── Theme Designer Agent ────────────────────────────────────────────────────
+
+def _build_theme_result(
+    surface_id: str, result: dict, cost: float, warnings: list[str]
+) -> list[dict]:
+    components: list[dict] = []
+
+    components.append({
+        "id": _id(surface_id, "title"),
+        "component": "Text",
+        "text": {"literalString": "Theme Design"},
+        "style": "h2",
+    })
+
+    # Theme name and concept
+    theme_name = result.get("theme_name", "")
+    concept = result.get("concept", "")
+    if theme_name:
+        components.append({
+            "id": _id(surface_id, "name"),
+            "component": "Text",
+            "text": {"literalString": theme_name},
+            "style": "h3",
+        })
+    if concept:
+        components.append({
+            "id": _id(surface_id, "concept"),
+            "component": "Text",
+            "text": {"literalString": concept},
+            "style": "caption",
+        })
+
+    # Color palette as colored Badges
+    palette = result.get("color_palette", {})
+    if palette:
+        row_id = _id(surface_id, "palette-row")
+        components.append({
+            "id": _id(surface_id, "palette-label"),
+            "component": "Text",
+            "text": {"literalString": "Color Palette"},
+            "style": "label",
+        })
+        components.append({
+            "id": row_id,
+            "component": "Row",
+            "wrap": True,
+        })
+        color_map = {"primary": "blue", "secondary": "purple", "accent": "green"}
+        for k, (role, hex_val) in enumerate(palette.items()):
+            components.append({
+                "id": _id(row_id, f"color-{k}"),
+                "component": "Badge",
+                "parent": row_id,
+                "text": {"literalString": f"{role.title()}: {hex_val}"},
+                "color": color_map.get(role, "blue"),
+            })
+
+    # Decoration concepts as Cards
+    concepts = result.get("decoration_concepts", [])
+    if concepts:
+        components.append({
+            "id": _id(surface_id, "decor-title"),
+            "component": "Text",
+            "text": {"literalString": "Decoration Concepts"},
+            "style": "h3",
+        })
+        for i, dec in enumerate(concepts):
+            card_id = _id(surface_id, f"decor-{i}")
+            area = dec.get("area", f"Area {i + 1}") if isinstance(dec, dict) else f"Area {i + 1}"
+            desc = dec.get("description", str(dec)) if isinstance(dec, dict) else str(dec)
+            components.append({
+                "id": card_id,
+                "component": "Card",
+                "title": {"literalString": area.replace("_", " ").title()},
+            })
+            components.append({
+                "id": _id(card_id, "desc"),
+                "component": "Text",
+                "parent": card_id,
+                "text": {"literalString": desc},
+                "style": "body",
+            })
+
+    # DIY ideas as a list
+    diy = result.get("diy_ideas", [])
+    if diy:
+        components.append({
+            "id": _id(surface_id, "diy-title"),
+            "component": "Text",
+            "text": {"literalString": "DIY Ideas"},
+            "style": "h3",
+        })
+        for i, idea in enumerate(diy):
+            components.append({
+                "id": _id(surface_id, f"diy-{i}"),
+                "component": "Text",
+                "text": {"literalString": f"• {idea}"},
+                "style": "body",
+            })
+
+    # Purchased items
+    purchased = result.get("purchased_items", [])
+    if purchased:
+        components.append({
+            "id": _id(surface_id, "purchased-title"),
+            "component": "Text",
+            "text": {"literalString": "Items to Purchase"},
+            "style": "h3",
+        })
+        for i, item in enumerate(purchased):
+            components.append({
+                "id": _id(surface_id, f"purchased-{i}"),
+                "component": "Text",
+                "text": {"literalString": f"• {item}"},
+                "style": "body",
+            })
+
+    _append_cost_and_warnings(components, surface_id, cost, warnings)
+    return components
+
+
+# ── Activity Coordinator Agent ──────────────────────────────────────────────
+
+def _build_activity_result(
+    surface_id: str, result: dict, cost: float, warnings: list[str]
+) -> list[dict]:
+    components: list[dict] = []
+
+    components.append({
+        "id": _id(surface_id, "title"),
+        "component": "Text",
+        "text": {"literalString": "Activity Plan"},
+        "style": "h2",
+    })
+
+    activities = result.get("activities", [])
+    total_time = result.get("total_activity_time_minutes", 0)
+    notes = result.get("notes", "")
+
+    for i, act in enumerate(activities):
+        card_id = _id(surface_id, f"act-{i}")
+        act_name = act.get("name", f"Activity {i + 1}") if isinstance(act, dict) else str(act)
+        components.append({
+            "id": card_id,
+            "component": "Card",
+            "title": {"literalString": act_name},
+        })
+
+        if isinstance(act, dict):
+            # Type badge with color coding
+            act_type = act.get("type", "")
+            if act_type:
+                type_color = {"high-energy": "red", "relaxed": "green", "mixed": "blue"}.get(act_type, "blue")
+                components.append({
+                    "id": _id(card_id, "type"),
+                    "component": "Badge",
+                    "parent": card_id,
+                    "text": {"literalString": act_type.replace("-", " ").title()},
+                    "color": type_color,
+                })
+
+            # Age suitability badge
+            age = act.get("age_suitability", "")
+            if age:
+                components.append({
+                    "id": _id(card_id, "age"),
+                    "component": "Badge",
+                    "parent": card_id,
+                    "text": {"literalString": age.title()},
+                    "color": "purple",
+                })
+
+            # Description
+            desc = act.get("description", "")
+            if desc:
+                components.append({
+                    "id": _id(card_id, "desc"),
+                    "component": "Text",
+                    "parent": card_id,
+                    "text": {"literalString": desc},
+                    "style": "body",
+                })
+
+            # Duration
+            duration = act.get("duration_minutes", 0)
+            if duration:
+                components.append({
+                    "id": _id(card_id, "duration"),
+                    "component": "KeyValue",
+                    "parent": card_id,
+                    "label": {"literalString": "Duration"},
+                    "value": {"literalString": f"{duration} min"},
+                })
+
+            # Materials needed
+            materials = act.get("materials_needed", [])
+            if materials:
+                components.append({
+                    "id": _id(card_id, "materials"),
+                    "component": "KeyValue",
+                    "parent": card_id,
+                    "label": {"literalString": "Materials"},
+                    "value": {"literalString": ", ".join(materials)},
+                })
+
+    if total_time:
+        components.append({
+            "id": _id(surface_id, "total-time"),
+            "component": "KeyValue",
+            "label": {"literalString": "Total Activity Time"},
+            "value": {"literalString": f"{total_time} minutes"},
+        })
+
+    if notes:
+        components.append({
+            "id": _id(surface_id, "notes"),
+            "component": "Text",
+            "text": {"literalString": notes},
+            "style": "caption",
+        })
+
+    _append_cost_and_warnings(components, surface_id, cost, warnings)
+    return components
+
+
+# ── Supplies Estimator Agent ────────────────────────────────────────────────
+
+def _build_supplies_result(
+    surface_id: str, result: dict, cost: float, warnings: list[str]
+) -> list[dict]:
+    components: list[dict] = []
+
+    components.append({
+        "id": _id(surface_id, "title"),
+        "component": "Text",
+        "text": {"literalString": "Supplies Estimate"},
+        "style": "h2",
+    })
+
+    supplies = result.get("supplies", [])
+    if supplies:
+        rows = []
+        for item in supplies:
+            if isinstance(item, dict):
+                rows.append({
+                    "category": item.get("category", "").title(),
+                    "item": item.get("item", ""),
+                    "qty": str(item.get("quantity", "")),
+                    "unit_cost": f"${float(item.get('unit_cost', 0)):,.2f}",
+                    "total": f"${float(item.get('total', 0)):,.2f}",
+                })
+        if rows:
+            components.append({
+                "id": _id(surface_id, "table"),
+                "component": "DataTable",
+                "columns": [
+                    {"key": "category", "label": "Category"},
+                    {"key": "item", "label": "Item"},
+                    {"key": "qty", "label": "Qty", "align": "right"},
+                    {"key": "unit_cost", "label": "Unit Cost", "align": "right"},
+                    {"key": "total", "label": "Total", "align": "right"},
+                ],
+                "rows": rows,
+            })
+
+    total_cost = result.get("total_supplies_cost", 0)
+    if total_cost:
+        components.append({
+            "id": _id(surface_id, "total-cost"),
+            "component": "KeyValue",
+            "label": {"literalString": "Total Supplies Cost"},
+            "value": {"literalString": f"${float(total_cost):,.2f}"},
+        })
+
+    shopping_list = result.get("shopping_list", [])
+    if shopping_list:
+        components.append({
+            "id": _id(surface_id, "shopping-title"),
+            "component": "Text",
+            "text": {"literalString": "Shopping List"},
+            "style": "h3",
+        })
+        for i, item in enumerate(shopping_list):
+            components.append({
+                "id": _id(surface_id, f"shop-{i}"),
+                "component": "Text",
+                "text": {"literalString": f"• {item}"},
+                "style": "body",
+            })
+
+    _append_cost_and_warnings(components, surface_id, cost, warnings)
+    return components
+
+
+# ── Accessibility Checker Agent ─────────────────────────────────────────────
+
+def _build_accessibility_result(
+    surface_id: str, result: dict, cost: float, warnings: list[str]
+) -> list[dict]:
+    components: list[dict] = []
+
+    components.append({
+        "id": _id(surface_id, "title"),
+        "component": "Text",
+        "text": {"literalString": "Accessibility Report"},
+        "style": "h2",
+    })
+
+    # Score and rating
+    score = result.get("accessibility_score", 0)
+    rating = result.get("rating", "")
+    if score or rating:
+        card_id = _id(surface_id, "score-card")
+        components.append({
+            "id": card_id,
+            "component": "Card",
+            "title": {"literalString": "Overall Assessment"},
+        })
+        if score:
+            score_color = "green" if score >= 0.7 else ("yellow" if score >= 0.4 else "red")
+            components.append({
+                "id": _id(card_id, "score"),
+                "component": "KeyValue",
+                "parent": card_id,
+                "label": {"literalString": "Score"},
+                "value": {"literalString": f"{score:.0%}"},
+            })
+            components.append({
+                "id": _id(card_id, "score-badge"),
+                "component": "Badge",
+                "parent": card_id,
+                "text": {"literalString": rating or ("Pass" if score >= 0.7 else ("Warning" if score >= 0.4 else "Fail"))},
+                "color": score_color,
+            })
+
+    # Features checklist with pass/warn/fail badges
+    features = result.get("features", {})
+    if features:
+        components.append({
+            "id": _id(surface_id, "features-title"),
+            "component": "Text",
+            "text": {"literalString": "Accessibility Features"},
+            "style": "h3",
+        })
+        for i, (feature, value) in enumerate(features.items()):
+            feat_id = _id(surface_id, f"feat-{i}")
+            label = feature.replace("_", " ").title()
+
+            # Determine status: True = pass (green), False = fail (red), special cases
+            if feature == "stairs_only":
+                # stairs_only: False is good, True is bad
+                badge_color = "red" if value else "green"
+                badge_text = "Yes" if value else "No"
+            elif isinstance(value, bool):
+                badge_color = "green" if value else "red"
+                badge_text = "Pass" if value else "Fail"
+            else:
+                badge_color = "yellow"
+                badge_text = str(value)
+
+            row_id = _id(surface_id, f"feat-row-{i}")
+            components.append({
+                "id": row_id,
+                "component": "Row",
+            })
+            components.append({
+                "id": _id(row_id, "label"),
+                "component": "Text",
+                "parent": row_id,
+                "text": {"literalString": label},
+                "style": "body",
+            })
+            components.append({
+                "id": _id(row_id, "badge"),
+                "component": "Badge",
+                "parent": row_id,
+                "text": {"literalString": badge_text},
+                "color": badge_color,
+            })
+
+    # Recommendations
+    recs = result.get("recommendations", [])
+    if recs:
+        components.append({
+            "id": _id(surface_id, "recs-title"),
+            "component": "Text",
+            "text": {"literalString": "Recommendations"},
+            "style": "h3",
+        })
+        for i, rec in enumerate(recs):
+            components.append({
+                "id": _id(surface_id, f"rec-{i}"),
+                "component": "Text",
+                "text": {"literalString": f"• {rec}"},
+                "style": "body",
+            })
+
+    # Required accommodations
+    accommodations = result.get("required_accommodations", result.get("accommodations", []))
+    if accommodations:
+        components.append({
+            "id": _id(surface_id, "accom-title"),
+            "component": "Text",
+            "text": {"literalString": "Required Accommodations"},
+            "style": "h3",
+        })
+        for i, acc in enumerate(accommodations):
+            if isinstance(acc, dict):
+                # Structured accommodation: {accommodation, priority, reason, estimated_cost}
+                acc_name = acc.get("accommodation", acc.get("name", f"Item {i+1}"))
+                priority = acc.get("priority", "")
+                reason = acc.get("reason", "")
+                acc_cost = acc.get("estimated_cost", 0)
+                card_id = _id(surface_id, f"accom-{i}")
+                priority_color = {"CRITICAL": "red", "HIGH": "yellow", "MEDIUM": "blue"}.get(priority, "gray")
+                components.append({
+                    "id": card_id,
+                    "component": "Card",
+                    "title": {"literalString": acc_name},
+                })
+                if priority:
+                    components.append({
+                        "id": _id(card_id, "priority"),
+                        "component": "Badge",
+                        "parent": card_id,
+                        "text": {"literalString": priority},
+                        "color": priority_color,
+                    })
+                if reason:
+                    components.append({
+                        "id": _id(card_id, "reason"),
+                        "component": "Text",
+                        "parent": card_id,
+                        "text": {"literalString": reason},
+                        "style": "body",
+                    })
+                if acc_cost:
+                    components.append({
+                        "id": _id(card_id, "cost"),
+                        "component": "KeyValue",
+                        "parent": card_id,
+                        "label": {"literalString": "Est. Cost"},
+                        "value": {"literalString": f"${float(acc_cost):,.0f}" if isinstance(acc_cost, (int, float)) else str(acc_cost)},
+                    })
+            else:
+                components.append({
+                    "id": _id(surface_id, f"accom-{i}"),
+                    "component": "Badge",
+                    "text": {"literalString": str(acc)},
+                    "color": "red",
+                })
+
+    _append_cost_and_warnings(components, surface_id, cost, warnings)
+    return components
+
+
+# ── Logistics Coordinator Agent ─────────────────────────────────────────────
+
+def _build_logistics_result(
+    surface_id: str, result: dict, cost: float, warnings: list[str]
+) -> list[dict]:
+    components: list[dict] = []
+
+    components.append({
+        "id": _id(surface_id, "title"),
+        "component": "Text",
+        "text": {"literalString": "Event Logistics"},
+        "style": "h2",
+    })
+
+    # Timeline as DataTable
+    timeline = result.get("timeline", [])
+    if timeline:
+        rows = []
+        for slot in timeline:
+            if isinstance(slot, dict):
+                time_range = slot.get("time", "")
+                end_time = slot.get("end_time", "")
+                if end_time:
+                    time_range = f"{time_range} - {end_time}"
+                rows.append({
+                    "time": time_range,
+                    "activity": slot.get("activity", ""),
+                    "responsible": slot.get("responsible", ""),
+                })
+        if rows:
+            components.append({
+                "id": _id(surface_id, "timeline-table"),
+                "component": "DataTable",
+                "columns": [
+                    {"key": "time", "label": "Time"},
+                    {"key": "activity", "label": "Activity"},
+                    {"key": "responsible", "label": "Responsible"},
+                ],
+                "rows": rows,
+            })
+
+    # Key logistics info
+    total_dur = result.get("total_duration_hours", 0)
+    setup_time = result.get("setup_time_required", "")
+    teardown_time = result.get("teardown_time_required", "")
+
+    info_items = []
+    if total_dur:
+        info_items.append(("Total Duration", f"{total_dur} hours"))
+    if setup_time:
+        info_items.append(("Setup Time", str(setup_time)))
+    if teardown_time:
+        info_items.append(("Teardown Time", str(teardown_time)))
+
+    if info_items:
+        card_id = _id(surface_id, "info-card")
+        components.append({
+            "id": card_id,
+            "component": "Card",
+            "title": {"literalString": "Key Details"},
+        })
+        for i, (label, value) in enumerate(info_items):
+            components.append({
+                "id": _id(card_id, f"kv-{i}"),
+                "component": "KeyValue",
+                "parent": card_id,
+                "label": {"literalString": label},
+                "value": {"literalString": value},
+            })
+
+    _append_cost_and_warnings(components, surface_id, cost, warnings)
+    return components
+
+
+# ── Communication Writer Agent ──────────────────────────────────────────────
+
+def _build_communication_result(
+    surface_id: str, result: dict, cost: float, warnings: list[str]
+) -> list[dict]:
+    components: list[dict] = []
+
+    components.append({
+        "id": _id(surface_id, "title"),
+        "component": "Text",
+        "text": {"literalString": "Event Communications"},
+        "style": "h2",
+    })
+
+    # Each communication type as a Card
+    comm_types = [
+        ("save_the_date", "Save the Date"),
+        ("invitation", "Invitation"),
+        ("reminder", "Reminder"),
+        ("day_of_instructions", "Day-of Instructions"),
+        ("rsvp_tracking", "RSVP Tracking"),
+    ]
+
+    for key, label in comm_types:
+        content = result.get(key, "")
+        if not content:
+            continue
+        card_id = _id(surface_id, f"comm-{key}")
+        components.append({
+            "id": card_id,
+            "component": "Card",
+            "title": {"literalString": label},
+        })
+
+        if isinstance(content, dict):
+            # Structured communication: {subject, body, send_date, channel, etc.}
+            for j, (field, val) in enumerate(content.items()):
+                if field in ("body", "template", "text", "message"):
+                    # Truncate long text to first 300 chars
+                    text_val = str(val)[:300]
+                    if len(str(val)) > 300:
+                        text_val += "..."
+                    components.append({
+                        "id": _id(card_id, f"body-{j}"),
+                        "component": "Text",
+                        "parent": card_id,
+                        "text": {"literalString": text_val},
+                        "style": "body",
+                    })
+                else:
+                    components.append({
+                        "id": _id(card_id, f"kv-{j}"),
+                        "component": "KeyValue",
+                        "parent": card_id,
+                        "label": {"literalString": field.replace("_", " ").title()},
+                        "value": {"literalString": str(val)[:100]},
+                    })
+        else:
+            # Plain string — truncate for display
+            text_val = str(content)[:500]
+            if len(str(content)) > 500:
+                text_val += "\n\n*[Full text available in event plan]*"
+            components.append({
+                "id": _id(card_id, "text"),
+                "component": "Text",
+                "parent": card_id,
+                "text": {"literalString": text_val},
+                "style": "body",
+            })
+
+    _append_cost_and_warnings(components, surface_id, cost, warnings)
+    return components
+
+
 # ── Generic Fallback ─────────────────────────────────────────────────────────
 
 def _build_generic_result(
@@ -428,6 +1032,12 @@ _AGENT_BUILDERS = {
     "menu": _build_menu_result,
     "budget": _build_budget_result,
     "weather": _build_weather_result,
+    "theme": _build_theme_result,
+    "activity": _build_activity_result,
+    "supplies": _build_supplies_result,
+    "accessibility": _build_accessibility_result,
+    "logistics": _build_logistics_result,
+    "communication": _build_communication_result,
 }
 
 

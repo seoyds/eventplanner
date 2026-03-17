@@ -21,7 +21,7 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 
-from conductor.orchestrator import run_orchestrator, TextEvent, AgentStatusEvent
+from conductor.orchestrator import run_orchestrator, TextEvent, AgentStatusEvent, A2UIEvent
 from conductor.a2ui_builder import build_a2ui_surface
 
 app = FastAPI(title="Event Orchestrator Conductor")
@@ -126,11 +126,8 @@ async def ag_ui_endpoint(request: Request):
                                 snapshot={"agent_statuses": {event.agent_id: event.status}},
                             )
                         ))
-                        # Build A2UI surface when an agent completes
-                        if event.status == "completed" and hasattr(event, 'result'):
-                            a2ui_messages = _try_build_a2ui(event.agent_id, event.result)
-                            if a2ui_messages:
-                                await event_queue.put(_encode_a2ui_event(encoder, a2ui_messages))
+                    elif isinstance(event, A2UIEvent):
+                        await event_queue.put(_encode_a2ui_event(encoder, event.messages))
             except Exception as e:
                 await event_queue.put(encoder.encode(
                     TextMessageContentEvent(

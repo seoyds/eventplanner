@@ -1,6 +1,8 @@
 "use client";
 
 import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ─── A2UI Types ─────────────────────────────────────────────────────────────
 
@@ -118,14 +120,23 @@ function TextComponent({ component, dataModel }: RendererProps) {
     overline: "text-xs font-medium uppercase tracking-wider text-gray-400",
   };
 
+  const className = styleMap[style] || styleMap.body;
+
+  // Use markdown rendering for body and caption text
+  if (style === "body" || style === "caption") {
+    return (
+      <div className={`${className} prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      </div>
+    );
+  }
+
   const TagMap: Record<string, keyof JSX.IntrinsicElements> = {
     h1: "h1", h2: "h2", h3: "h3", h4: "h4", h5: "h5",
-    body: "p", caption: "span", label: "span", overline: "span",
+    label: "span", overline: "span",
   };
 
   const Tag = TagMap[style] || "p";
-  const className = styleMap[style] || styleMap.body;
-
   return <Tag className={className}>{text}</Tag>;
 }
 

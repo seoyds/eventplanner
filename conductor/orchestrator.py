@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage, TextBlock
 from shared.nanda_registry import NandaRegistryClient
+from conductor.a2ui_builder import build_a2ui_surface
 
 
 @dataclass
@@ -27,6 +28,12 @@ class AgentStatusEvent:
     """An agent status change to stream to the frontend."""
     agent_id: str
     status: str  # "running", "completed", "error"
+
+
+@dataclass
+class A2UIEvent:
+    """A2UI surface messages to stream to the frontend."""
+    messages: list[dict]
 
 
 # Agents that can run independently (Wave 1) vs those needing prior context (Wave 2/3)
@@ -83,6 +90,31 @@ async def _call_agent(agent_url: str, agent_id: str, requirements: dict, context
         )
         data = resp.json()
         return data.get("result", {})
+
+
+def _extract_agent_result(a2a_response: dict) -> dict | None:
+    """Extract the AgentResult dict from an A2A task response.
+
+    The A2A response nests the agent result inside:
+    result.status.message.parts[0].text (JSON string of AgentResult)
+    """
+    try:
+        status = a2a_response.get("status", {})
+        message = status.get("message", {}) if isinstance(status, dict) else {}
+        parts = message.get("parts", []) if isinstance(message, dict) else []
+        for part in parts:
+            if isinstance(part, dict) and part.get("kind") == "text":
+                return json.loads(part["text"])
+
+        # Try artifacts
+        for artifact in a2a_response.get("artifacts", []):
+            if isinstance(artifact, dict):
+                for part in artifact.get("parts", []):
+                    if isinstance(part, dict) and part.get("kind") == "text":
+                        return json.loads(part["text"])
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+    return None
 
 
 async def _short_query(prompt: str, system: str) -> str:
@@ -180,7 +212,7 @@ Keep it concise — just the plan overview. Do NOT execute anything.""",
 
         results = await asyncio.gather(*[_call_one(aid) for aid in wave_active])
 
-        # Process results and emit status events
+        # Process results: emit status events + A2UI surfaces
         for agent_id, result, error in results:
             if error:
                 all_results[agent_id] = {"error": error}
@@ -189,6 +221,16 @@ Keep it concise — just the plan overview. Do NOT execute anything.""",
             else:
                 all_results[agent_id] = result
                 yield AgentStatusEvent(agent_id=agent_id, status="completed")
+
+                # Build and emit A2UI surface for this agent's result
+                agent_result = _extract_agent_result(result) if result else None
+                if agent_result:
+                    try:
+                        a2ui_msgs = build_a2ui_surface(agent_id, agent_result)
+                        if a2ui_msgs:
+                            yield A2UIEvent(messages=a2ui_msgs)
+                    except Exception:
+                        pass  # A2UI is optional — don't break the flow
 
     # --- Phase 3: Compile blueprint (short query, no tools) ---
     yield TextEvent(text="\n\n---\n\n**Compiling your Event Blueprint...**\n\n")
