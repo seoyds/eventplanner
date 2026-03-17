@@ -4,9 +4,10 @@ Multi-phase flow that keeps each Claude SDK session short to avoid
 CLI subprocess timeout (CLIConnectionError).
 
 Phase 1: Short query() — discover agents, generate plan text
-Phase 2: Direct httpx calls — call each agent via A2A (no SDK)
+Phase 2: Direct httpx calls — call each agent via A2A (parallel per wave)
 Phase 3: Short query() — compile results into final blueprint
 """
+import asyncio
 import json
 import httpx
 from dataclasses import dataclass
@@ -148,8 +149,7 @@ Keep it concise — just the plan overview. Do NOT execute anything.""",
     yield TextEvent(text=plan_text)
     yield TextEvent(text="\n\n---\n\n")
 
-    # --- Phase 2: Execute agent calls directly ---
-    # Parse requirements from user message
+    # --- Phase 2: Execute agent calls in parallel per wave ---
     requirements = {"user_request": user_message}
     all_results: dict[str, dict] = {}
 
@@ -158,32 +158,45 @@ Keep it concise — just the plan overview. Do NOT execute anything.""",
         if not wave_active:
             continue
 
-        yield TextEvent(text=f"\n**{wave_name}** — calling {', '.join(wave_active)}...\n")
+        yield TextEvent(text=f"\n**{wave_name}** — calling {', '.join(wave_active)} in parallel...\n")
 
+        # Mark all agents in this wave as running
         for agent_id in wave_active:
-            agent_info = agents[agent_id]
             yield AgentStatusEvent(agent_id=agent_id, status="running")
 
+        # Call all agents in this wave concurrently
+        async def _call_one(aid: str) -> tuple[str, dict | None, str | None]:
+            """Call a single agent, return (agent_id, result, error)."""
             try:
                 result = await _call_agent(
-                    agent_url=agent_info["url"],
-                    agent_id=agent_id,
+                    agent_url=agents[aid]["url"],
+                    agent_id=aid,
                     requirements=requirements,
                     context=all_results,
                 )
+                return (aid, result, None)
+            except Exception as e:
+                return (aid, None, f"{type(e).__name__}: {e}")
+
+        results = await asyncio.gather(*[_call_one(aid) for aid in wave_active])
+
+        # Process results and emit status events
+        for agent_id, result, error in results:
+            if error:
+                all_results[agent_id] = {"error": error}
+                yield AgentStatusEvent(agent_id=agent_id, status="error")
+                yield TextEvent(text=f"\n> {agent_id} error: {error}\n")
+            else:
                 all_results[agent_id] = result
                 yield AgentStatusEvent(agent_id=agent_id, status="completed")
-            except Exception as e:
-                all_results[agent_id] = {"error": f"{type(e).__name__}: {e}"}
-                yield AgentStatusEvent(agent_id=agent_id, status="error")
-                yield TextEvent(text=f"\n> {agent_id} encountered an error: {type(e).__name__}\n")
 
     # --- Phase 3: Compile blueprint (short query, no tools) ---
     yield TextEvent(text="\n\n---\n\n**Compiling your Event Blueprint...**\n\n")
 
     results_summary = json.dumps(all_results, indent=2, default=str)
-    blueprint = await _short_query(
-        prompt=f"""Original request: {user_message}
+    try:
+        blueprint = await _short_query(
+            prompt=f"""Original request: {user_message}
 
 Here are all the results from the specialist agents:
 {results_summary}
@@ -192,9 +205,14 @@ Compile these into a comprehensive, well-organized Event Blueprint.
 Include sections for each aspect (venue, menu, theme, activities, etc.).
 Highlight the top recommendations, total estimated cost vs budget, and any warnings.
 Make it practical and actionable.""",
-        system="""You are the Event Orchestrator Conductor compiling a final Event Blueprint.
+            system="""You are the Event Orchestrator Conductor compiling a final Event Blueprint.
 Organize the agent results into a clear, structured, actionable plan.
 Use markdown formatting with headers, bullet points, and tables where appropriate.
 Always include a budget summary comparing estimated costs to the stated budget.""",
-    )
-    yield TextEvent(text=blueprint)
+        )
+        yield TextEvent(text=blueprint)
+    except Exception as e:
+        # If the compile query fails, dump raw results as fallback
+        yield TextEvent(text=f"**Note:** Blueprint compilation encountered an error ({type(e).__name__}). Here are the raw agent results:\n\n")
+        for agent_id, result in all_results.items():
+            yield TextEvent(text=f"### {agent_id}\n```json\n{json.dumps(result, indent=2, default=str)[:2000]}\n```\n\n")
